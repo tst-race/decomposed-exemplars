@@ -1,0 +1,82 @@
+{
+    "plugins": [
+        {
+            "file_path": "PluginCommsTwoSixStubDecomposed",
+            "plugin_type": "comms",
+            "file_type": "shared_library",
+            "node_type": "any",
+            "shared_library_path": "libPluginCommsTwoSixStubTransport.so",
+            "channels": [],
+            "transports": ["twoSixIndirect"],
+            "usermodels": [],
+            "encodings": []
+        },
+        {
+            "file_path": "PluginCommsTwoSixStubDecomposed",
+            "plugin_type": "comms",
+            "file_type": "shared_library",
+            "node_type": "any",
+            "shared_library_path": "libPluginCommsTwoSixStubUserModel.so",
+            "channels": [],
+            "transports": [],
+            "usermodels": ["rapidUser"],
+            "encodings": []
+        },
+        {
+            "file_path": "PluginCommsTwoSixStubDecomposed",
+            "plugin_type": "comms",
+            "file_type": "shared_library",
+            "node_type": "any",
+            "shared_library_path": "libPluginCommsTwoSixStubUserModelFile.so",
+            "channels": [],
+            "transports": [],
+            "usermodels": ["twoSixFileBasedUserModel"],
+            "encodings": []
+        },
+        {
+            "file_path": "PluginCommsTwoSixStubDecomposed",
+            "plugin_type": "comms",
+            "file_type": "shared_library",
+            "node_type": "any",
+            "shared_library_path": "libPluginCommsTwoSixStubEncoding.so",
+            "channels": [],
+            "transports": [],
+            "usermodels": [],
+            "encodings": ["base64", "noop"]
+        }
+    ],
+    "channel_properties":{
+        "twoSixIndirectCompositionFile": {
+            "channelGid": "twoSixIndirectCompositionFile",
+            "connectionType": "CT_INDIRECT",
+            "linkDirection": "LD_BIDI",
+            "transmissionType": "TT_MULTICAST"
+        },
+        "twoSixIndirectComposition": {
+            "channelGid": "twoSixIndirectComposition",
+            "connectionType": "CT_INDIRECT",
+            "linkDirection": "LD_BIDI",
+            "transmissionType": "TT_MULTICAST"
+        }        
+    },
+    "channel_parameters": [
+      {
+          "key": "env",
+          "required": false
+      }
+    ],
+    "compositions": [
+        {
+            "id": "twoSixIndirectComposition",
+            "transport": "twoSixIndirect",
+            "usermodel": "rapidUser",
+            "encodings": ["base64"]
+        },
+        {
+            "id": "twoSixIndirectCompositionFile",
+            "transport": "twoSixIndirect",
+            "usermodel": "twoSixFileBasedUserModel",
+            "encodings": ["base64"]
+        }
+    ]
+}
