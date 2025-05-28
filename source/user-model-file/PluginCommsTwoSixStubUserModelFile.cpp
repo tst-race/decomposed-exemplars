@@ -48,7 +48,11 @@ ComponentStatus PluginCommsTwoSixStubUserModelFile::onUserInputReceived(
 
     std::string filename;
     if (answered) {
+      if (response[0] == '/') {
         filename = response;
+      } else {
+        filename = pluginConfig.pluginDirectory + "/" + response;
+      }
     } else {
         filename = pluginConfig.pluginDirectory + "/actions.json";
     }
@@ -57,7 +61,7 @@ ComponentStatus PluginCommsTwoSixStubUserModelFile::onUserInputReceived(
 }
 
 void PluginCommsTwoSixStubUserModelFile::loadActionFile(std::string filename) {
-    TRACE_METHOD();
+    TRACE_METHOD(filename);
 
     try {
         std::ifstream ifs(filename);

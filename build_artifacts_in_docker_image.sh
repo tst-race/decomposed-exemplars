@@ -53,11 +53,11 @@ FILEPATH="$(pwd)"
 RACE_CONTAINER_REGISTRY="ghcr.io"
 RACE_GITHUB_GROUP="tst-race"
 RACE_COMPILE_IMAGE_REPO="raceboat"
-RACE_COMPILE_IMAGE_NAME="raceboat-compile"
+RACE_COMPILE_IMAGE_NAME="raceboat-plugin-builder"
 LOCAL=false
 
 # Version values
-RACE_VERSION="2.6.0"
+RACE_VERSION="main"
 
 COMMAND="./build_artifacts.sh"
 
@@ -203,7 +203,7 @@ done
 
 if [ "${LOCAL}" = true ]; then
     # RACE_COMPILE_IMAGE="${RACE_COMPILE_IMAGE_NAME}:${RACE_VERSION}"
-    RACE_COMPILE_IMAGE="raceboat-compile"
+    RACE_COMPILE_IMAGE="raceboat-plugin-builder"
 else
     RACE_COMPILE_IMAGE="${RACE_CONTAINER_REGISTRY}/${RACE_GITHUB_GROUP}/${RACE_COMPILE_IMAGE_REPO}/${RACE_COMPILE_IMAGE_NAME}:${RACE_VERSION}"
     docker pull "${RACE_COMPILE_IMAGE}"
@@ -216,7 +216,7 @@ formatlog "INFO" "Running Docker Container and Running Build Command"
 docker run --rm \
     -v "${FILEPATH}":/code \
     -w /code \
-    --name "decomposed-exemplar-builder" \
+    --name "decomposed-exemplar-builder2" \
     ${DOCKER_ARGS} \
     "${RACE_COMPILE_IMAGE}" \
     "${COMMAND}" ${BUILD_ARGS} "$@"

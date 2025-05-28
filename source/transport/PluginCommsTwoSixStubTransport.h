@@ -24,6 +24,8 @@
 
 #include <atomic>
 
+#include <algorithm>
+
 #include "LinkMap.h"
 
 class PluginCommsTwoSixStubTransport : public ITransportComponent {
