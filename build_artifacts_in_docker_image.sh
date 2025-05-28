@@ -206,7 +206,7 @@ if [ "${LOCAL}" = true ]; then
     RACE_COMPILE_IMAGE="raceboat-plugin-builder"
 else
     RACE_COMPILE_IMAGE="${RACE_CONTAINER_REGISTRY}/${RACE_GITHUB_GROUP}/${RACE_COMPILE_IMAGE_REPO}/${RACE_COMPILE_IMAGE_NAME}:${RACE_VERSION}"
-    # docker pull "${RACE_COMPILE_IMAGE}"
+    docker pull "${RACE_COMPILE_IMAGE}"
 fi
 
 formatlog "INFO" "Using image ${RACE_COMPILE_IMAGE}"
