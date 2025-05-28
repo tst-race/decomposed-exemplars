@@ -18,7 +18,7 @@
 #ifndef __COMMS_TWOSIX_USER_MODEL_MARKOV_MODEL_H__
 #define __COMMS_TWOSIX_USER_MODEL_MARKOV_MODEL_H__
 
-#include <boost/numeric/ublas/matrix.hpp>
+// #include <boost/numeric/ublas/matrix.hpp>
 #include <random>
 
 class MarkovModel {

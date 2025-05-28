@@ -209,6 +209,7 @@ int Link::fetchOnActionThread(int latestIndex) {
             } else {
                 logDebug(logPrefix + "received encrypted package");
                 std::vector<uint8_t> message = base64::decode(post);
+                logDebug("hash of fetch " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(message.begin(), message.end()))));
                 sdk->onReceive(linkId, {linkId, "*/*", false, {}}, message);
             }
         }
@@ -317,6 +318,7 @@ void Link::postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t a
         return;
     }
 
+    logDebug("hash of post " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(iter->second.begin(), iter->second.end()))));
     std::string message = base64::encode(iter->second);
     auto msgHash = postedMessageHashes.addMessage(message);
 
