@@ -1,0 +1,30 @@
+version: '3.7'
+
+networks:
+  raceboat-network:
+    external: true
+
+services:
+  twosix-redis:
+    container_name: twosix-redis
+    image: redis:6.0.6
+    networks:
+    - raceboat-network
+
+  twosix-whiteboard:
+    command: -w 8
+    container_name: twosix-whiteboard
+    depends_on:
+    - twosix-redis
+    hostname: twosix-whiteboard
+    image: ghcr.io/tst-race/race-core/twosix-whiteboard:main
+    networks:
+    - raceboat-network
+    environment:
+      REDIS_HOSTNAME: twosix-redis
+
+x-logging:
+  driver: json-file
+  options:
+    max-file: '5'
+    max-size: 1m
