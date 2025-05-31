@@ -174,10 +174,10 @@ else()
             ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/manifest.json
             ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/manifest.json
     )
-    # add_custom_target(PluginCommsTwoSixStubManifest ALL DEPENDS
-    #     ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/manifest.json
-    #     ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/manifest.json
-    # )
+    add_custom_target(PluginCommsTwoSixStubManifest ALL DEPENDS
+        ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/manifest.json
+        ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/manifest.json
+    )
 endif()
 
 install(
