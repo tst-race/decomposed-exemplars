@@ -216,7 +216,7 @@ formatlog "INFO" "Running Docker Container and Running Build Command"
 docker run --rm \
     -v "${FILEPATH}":/code \
     -w /code \
-    --name "decomposed-exemplar-builder2" \
+    --name "decomposed-exemplar-builder" \
     ${DOCKER_ARGS} \
     "${RACE_COMPILE_IMAGE}" \
     "${COMMAND}" ${BUILD_ARGS} "$@"
