@@ -1,4 +1,3 @@
-
 //
 // Copyright 2023 Two Six Technologies
 //
@@ -35,11 +34,13 @@ static std::ostream &operator<<(std::ostream &out, const std::vector<RaceHandle>
 }
 }  // namespace std
 
-Link::Link(LinkID linkId, LinkAddress address, LinkProperties properties, ITransportSdk *sdk) :
+Link::Link(LinkID linkId, LinkAddress address, LinkProperties properties, 
+           ITransportSdk *sdk, bool processNewestFirst) :
     sdk(sdk),
     linkId(std::move(linkId)),
     address(std::move(address)),
-    properties(std::move(properties)) {
+    properties(std::move(properties)),
+    processNewestFirst(processNewestFirst) {
     this->properties.linkAddress = nlohmann::json(this->address).dump();
 }
 
@@ -318,15 +319,24 @@ int Link::fetchOnActionThread(int latestIndex) {
                      " posts may have been lost.");
         }
 
-        for (const auto &post : posts) {
+        // Define the post processing logic
+        auto processPost = [&](const auto& post) {
             if (postedMessageHashes.findAndRemoveMessage(post)) {
                 logDebug(logPrefix + "received post from self, ignoring");
             } else {
                 logDebug(logPrefix + "received encrypted package");
                 std::vector<uint8_t> message = base64::decode(post);
-                logDebug("hash of fetch " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(message.begin(), message.end()))));
+                logDebug("hash of fetch " + RaceLog::stringifyValues("hash", 
+                    std::hash<std::string>()(std::string(message.begin(), message.end()))));
                 sdk->onReceive(linkId, {linkId, "*/*", false, {}}, message);
             }
+        };
+
+        // Process posts using the appropriate iterator
+        if (processNewestFirst) {
+            std::for_each(posts.rbegin(), posts.rend(), processPost);
+        } else {
+            std::for_each(posts.begin(), posts.end(), processPost);
         }
 
         if (numPosts > 0) {
@@ -334,8 +344,8 @@ int Link::fetchOnActionThread(int latestIndex) {
         }
 
         fetchAttempts = 0;
-
         return newLatestIndex;
+
     } catch (curl_exception &error) {
         logError(logPrefix + "curl exception: " + std::string(error.what()));
     } catch (nlohmann::json::exception &error) {

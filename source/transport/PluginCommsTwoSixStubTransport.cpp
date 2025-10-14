@@ -81,8 +81,11 @@ PluginCommsTwoSixStubTransport::PluginCommsTwoSixStubTransport(ITransportSdk *sd
     racePersona(sdk->getActivePersona()),
     channelProperties(sdk->getChannelProperties()),
     defaultLinkProperties(createDefaultLinkProperties(channelProperties)) {
-    // No user input requests are needed, so transport is ready right away
-    sdk->updateState(COMPONENT_STATE_STARTED);
+    processNewestFirstHandle = sdk->requestPluginUserInput(
+        "processNewestFirst",
+        "Process newest messages first? (yes/no, default no)",
+        true
+    ).handle;
 }
 
 /**
@@ -99,7 +102,19 @@ ComponentStatus PluginCommsTwoSixStubTransport::onUserInputReceived(RaceHandle h
                                                                     bool answered,
                                                                     const std::string &response) {
     TRACE_METHOD(handle, answered, response);
-    // We don't make any user input requests
+     if (!answered) {
+        logDebug(logPrefix + "User input not answered for handle: " + std::to_string(handle));
+        return COMPONENT_OK;
+    }
+
+    if (handle == processNewestFirstHandle) {
+        processNewestFirst = (response == "yes");
+        logDebug(logPrefix + "Process newest messages first: " + std::to_string(processNewestFirst));
+    } else {
+        logError(logPrefix + "Unexpected handle received: " + std::to_string(handle));
+        return COMPONENT_ERROR;
+    }
+    sdk->updateState(COMPONENT_STATE_STARTED);
     return COMPONENT_OK;
 }
 
@@ -223,7 +238,12 @@ ComponentStatus PluginCommsTwoSixStubTransport::postLinkCreate(const std::string
  */
 std::shared_ptr<Link> PluginCommsTwoSixStubTransport::createLinkInstance(
     const LinkID &linkId, const LinkAddress &address, const LinkProperties &properties) {
-    auto link = std::make_shared<Link>(linkId, address, properties, sdk);
+    auto link = std::make_shared<Link>(
+        linkId, 
+        address, 
+        properties, 
+        sdk, 
+        processNewestFirst);
     link->start();
     return link;
 }

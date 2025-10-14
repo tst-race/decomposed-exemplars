@@ -1,4 +1,3 @@
-
 //
 // Copyright 2023 Two Six Technologies
 //
@@ -41,7 +40,8 @@ class ITransportSdk;
  */
 class Link {
 public:
-    Link(LinkID linkId, LinkAddress address, LinkProperties properties, ITransportSdk *sdk);
+    Link(LinkID linkId, LinkAddress address, LinkProperties properties, 
+         ITransportSdk *sdk, bool processNewestFirst = false);
 
     virtual ~Link();
 
@@ -120,6 +120,7 @@ private:
     LinkID linkId;
     LinkAddress address;
     LinkProperties properties;
+    bool processNewestFirst;
 
     struct QueuedAction {
         bool post;

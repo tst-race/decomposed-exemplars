@@ -72,6 +72,8 @@ private:
     std::string racePersona;
     ChannelProperties channelProperties;
     LinkProperties defaultLinkProperties;
+    bool processNewestFirst = false; // Used for integration testing out-of-order delivery
+    RaceHandle processNewestFirstHandle;
 
     LinkMap links;
 
