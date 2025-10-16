@@ -38,6 +38,17 @@
             "plugin_type": "comms",
             "file_type": "shared_library",
             "node_type": "any",
+            "shared_library_path": "libPluginCommsTwoSixStubUserModelReactive.so",
+            "channels": [],
+            "transports": [],
+            "usermodels": ["twoSixReactiveUserModel"],
+            "encodings": []
+        },
+        {
+            "file_path": "PluginCommsTwoSixStubDecomposed",
+            "plugin_type": "comms",
+            "file_type": "shared_library",
+            "node_type": "any",
             "shared_library_path": "libPluginCommsTwoSixStubEncoding.so",
             "channels": [],
             "transports": [],
@@ -52,7 +63,13 @@
             "linkDirection": "LD_BIDI",
             "transmissionType": "TT_MULTICAST"
         },
-        "twoSixIndirectComposition": {
+        "twoSixIndirectCompositionReactive": {
+            "channelGid": "twoSixIndirectCompositionReactive",
+            "connectionType": "CT_INDIRECT",
+            "linkDirection": "LD_BIDI",
+            "transmissionType": "TT_MULTICAST"
+        },
+         "twoSixIndirectComposition": {
             "channelGid": "twoSixIndirectComposition",
             "connectionType": "CT_INDIRECT",
             "linkDirection": "LD_BIDI",
@@ -76,6 +93,12 @@
             "id": "twoSixIndirectCompositionFile",
             "transport": "twoSixIndirect",
             "usermodel": "twoSixFileBasedUserModel",
+            "encodings": ["base64"]
+        },
+        {
+            "id": "twoSixIndirectCompositionReactive",
+            "transport": "twoSixIndirect",
+            "usermodel": "twoSixReactiveUserModel",
             "encodings": ["base64"]
         }
     ]
