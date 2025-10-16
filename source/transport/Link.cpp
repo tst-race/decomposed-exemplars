@@ -119,6 +119,14 @@ ComponentStatus Link::post(std::vector<RaceHandle> handles, uint64_t actionId) {
         // but this is expected for our own comms plugin.
         logInfo(logPrefix + "no enqueued content for given action ID: " + std::to_string(actionId));
         updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
+
+        nlohmann::json eventJson = {
+          {"linkId", linkId},
+          {"actionId", actionId},
+          {"status", "posted"}
+        };
+        sdk->onEvent({eventJson.dump()});
+
         return COMPONENT_OK;
     }
 
@@ -220,6 +228,12 @@ int Link::fetchOnActionThread(int latestIndex) {
 
         fetchAttempts = 0;
 
+        nlohmann::json eventJson = {
+          {"linkId", linkId},
+          {"actionId", 0},
+          {"status", "fetched"}
+        };
+        sdk->onEvent({eventJson.dump()});
         return newLatestIndex;
     } catch (curl_exception &error) {
         logError(logPrefix + "curl exception: " + std::string(error.what()));
@@ -234,6 +248,12 @@ int Link::fetchOnActionThread(int latestIndex) {
         logError(logPrefix + "Retry limit reached. Giving up.");
         sdk->updateState(COMPONENT_STATE_FAILED);
     }
+    nlohmann::json eventJson = {
+      {"linkId", linkId},
+      {"actionId", 0},
+      {"status", "failed"}
+    };
+    sdk->onEvent({eventJson.dump()});
 
     return latestIndex;
 }
@@ -329,13 +349,20 @@ void Link::postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t a
         }
     }
 
+    nlohmann::json eventJson = {
+      {"linkId", linkId},
+      {"actionId", actionId}
+    };
     if (tries == address.maxTries) {
         logError(logPrefix + "retry limit exceeded: post failed");
         postedMessageHashes.removeHash(msgHash);
         updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
+        eventJson["status"] = "failed";
     } else {
         updatePackageStatus(handles, PACKAGE_SENT);
+        eventJson["status"] = "posted";
     }
+    sdk->onEvent({eventJson.dump()});
 }
 
 void Link::updatePackageStatus(const std::vector<RaceHandle> &handles, PackageStatus status) {
