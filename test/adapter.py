@@ -31,13 +31,32 @@ KIT_NAME = "PluginCommsTwoSixStubDecomposed"
 WHITEBOARD_HOSTNAME = "twosix-whiteboard"
 WHITEBOARD_PORT = 5000
 SIDECAR_SERVICES = {
-    "twosix-redis": {"image": "redis:6.0.6"},
+    "twosix-redis": {
+        "image": "redis:6.0.6",
+        "healthcheck": {
+            "test": ["CMD", "redis-cli", "ping"],
+            "interval": "2s",
+            "timeout": "2s",
+            "retries": 15,
+        },
+    },
     "twosix-whiteboard": {
         "image": "ghcr.io/tst-race/race-core/twosix-whiteboard:main",
         "command": "-w 8",
         "hostname": WHITEBOARD_HOSTNAME,
-        "depends_on": ["twosix-redis"],
+        "depends_on": {"twosix-redis": {"condition": "service_healthy"}},
         "environment": {"REDIS_HOSTNAME": "twosix-redis"},
+        "healthcheck": {
+            "test": [
+                "CMD",
+                "python3",
+                "-c",
+                "import socket; socket.create_connection(('127.0.0.1', 5000), 2).close()",
+            ],
+            "interval": "2s",
+            "timeout": "2s",
+            "retries": 15,
+        },
     },
 }
 
