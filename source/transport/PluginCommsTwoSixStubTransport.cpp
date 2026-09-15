@@ -133,6 +133,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::postLinkCreate(const std::string
         return COMPONENT_ERROR;
     }
 
+    deletedLinks.erase(linkId);
     links.add(link);
     sdk->onLinkStatusChanged(handle, linkId, linkStatus, {});
 
@@ -214,6 +215,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::destroyLink(RaceHandle handle,
         return COMPONENT_ERROR;
     }
 
+    deletedLinks.insert(linkId);
     link->shutdown();
 
     return COMPONENT_OK;
@@ -255,8 +257,14 @@ ComponentStatus PluginCommsTwoSixStubTransport::enqueueContent(
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
         // If the action is for a wildcard link id, the component manager chooses the link and
-        // specifies it when calling enqueueContent()
+        // specifies it when calling enqueueContent(). Keep the mapping even if the link was
+        // deleted so doAction() can report attached package failures.
         actionToLinkIdMap[action.actionId] = params.linkId;
+        if (deletedLinks.count(params.linkId) != 0) {
+            logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
+                     " for deleted link " + params.linkId);
+            return COMPONENT_OK;
+        }
         switch (actionParams.type) {
             case ACTION_FETCH:
                 // Nothing to be queued
@@ -284,6 +292,12 @@ ComponentStatus PluginCommsTwoSixStubTransport::dequeueContent(const Action &act
         ActionJson actionParams = nlohmann::json::parse(action.json);
         LinkID linkId = actionParams.linkId == "*" ? actionToLinkIdMap.at(action.actionId) :
                                                      actionParams.linkId;
+        if (deletedLinks.count(linkId) != 0) {
+            logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
+                     " for deleted link " + linkId);
+            actionToLinkIdMap.erase(action.actionId);
+            return COMPONENT_OK;
+        }
         actionToLinkIdMap.erase(action.actionId);
         switch (actionParams.type) {
             case ACTION_POST:
@@ -335,6 +349,11 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                     return status;
                 } else {
                     logInfo(logPrefix + "Fetching from single link");
+                    if (deletedLinks.count(linkId) != 0) {
+                        logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
+                                 " for deleted link " + linkId);
+                        return COMPONENT_OK;
+                    }
                     return links.get(linkId)->fetch();
                 }
 
@@ -350,6 +369,14 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                     }
                 }
                 actionToLinkIdMap.erase(action.actionId);
+                if (deletedLinks.count(linkId) != 0) {
+                    logDebug(logPrefix + "Failing action " + std::to_string(action.actionId) +
+                             " for deleted link " + linkId);
+                    for (RaceHandle handle : handles) {
+                        sdk->onPackageStatusChanged(handle, PACKAGE_FAILED_GENERIC);
+                    }
+                    return COMPONENT_OK;
+                }
                 return links.get(linkId)->post(std::move(handles), action.actionId);
 
             default:

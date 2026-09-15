@@ -25,6 +25,7 @@
 #include <atomic>
 
 #include <algorithm>
+#include <unordered_set>
 
 #include "LinkMap.h"
 
@@ -74,6 +75,7 @@ private:
     LinkProperties defaultLinkProperties;
 
     LinkMap links;
+    std::unordered_set<LinkID> deletedLinks;
 
     std::unordered_map<uint64_t, LinkID> actionToLinkIdMap;
 
