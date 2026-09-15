@@ -179,3 +179,50 @@ TEST_F(TestPluginCommsTwoSixStubTransport, should_perform_post_action) {
     Action action{8675309, 42, "{\"linkId\":\"LinkID_2\",\"type\":\"post\"}"};
     ASSERT_EQ(COMPONENT_OK, transport->doAction({7}, action));
 }
+
+TEST_F(TestPluginCommsTwoSixStubTransport, should_ignore_fetch_for_deleted_link) {
+    auto transport = createTransport();
+    ASSERT_EQ(COMPONENT_OK, transport->createLink(2u, "LinkID_2"));
+    EXPECT_CALL(*mockLinks["LinkID_2"], shutdown());
+    ASSERT_EQ(COMPONENT_OK, transport->destroyLink(3u, "LinkID_2"));
+
+    Action action{8675309, 42, "{\"linkId\":\"LinkID_2\",\"type\":\"fetch\"}"};
+    ASSERT_EQ(COMPONENT_OK, transport->doAction({}, action));
+}
+
+TEST_F(TestPluginCommsTwoSixStubTransport, should_ignore_post_for_deleted_link) {
+    auto transport = createTransport();
+    ASSERT_EQ(COMPONENT_OK, transport->createLink(2u, "LinkID_2"));
+    EXPECT_CALL(*mockLinks["LinkID_2"], shutdown());
+    ASSERT_EQ(COMPONENT_OK, transport->destroyLink(3u, "LinkID_2"));
+
+    Action action{8675309, 42, "{\"linkId\":\"LinkID_2\",\"type\":\"post\"}"};
+    ASSERT_EQ(COMPONENT_OK, transport->doAction({}, action));
+}
+
+TEST_F(TestPluginCommsTwoSixStubTransport, should_fail_post_handles_for_deleted_link) {
+    auto transport = createTransport();
+    ASSERT_EQ(COMPONENT_OK, transport->createLink(2u, "LinkID_2"));
+    EXPECT_CALL(*mockLinks["LinkID_2"], shutdown());
+    ASSERT_EQ(COMPONENT_OK, transport->destroyLink(3u, "LinkID_2"));
+
+    EXPECT_CALL(sdk, onPackageStatusChanged(7u, PACKAGE_FAILED_GENERIC));
+    EXPECT_CALL(sdk, onPackageStatusChanged(8u, PACKAGE_FAILED_GENERIC));
+    Action action{8675309, 42, "{\"linkId\":\"LinkID_2\",\"type\":\"post\"}"};
+    ASSERT_EQ(COMPONENT_OK, transport->doAction({7u, 8u}, action));
+}
+
+TEST_F(TestPluginCommsTwoSixStubTransport,
+       should_fail_post_handles_for_deleted_wildcard_link) {
+    auto transport = createTransport();
+    ASSERT_EQ(COMPONENT_OK, transport->createLink(2u, "LinkID_2"));
+    EXPECT_CALL(*mockLinks["LinkID_2"], shutdown());
+    ASSERT_EQ(COMPONENT_OK, transport->destroyLink(3u, "LinkID_2"));
+
+    Action action{8675309, 42, "{\"linkId\":\"*\",\"type\":\"post\"}"};
+    EncodingParameters encodeParams{"LinkID_2", "*/*", true, ""};
+    ASSERT_EQ(COMPONENT_OK, transport->enqueueContent(encodeParams, action, {0x31}));
+
+    EXPECT_CALL(sdk, onPackageStatusChanged(7u, PACKAGE_FAILED_GENERIC));
+    ASSERT_EQ(COMPONENT_OK, transport->doAction({7u}, action));
+}

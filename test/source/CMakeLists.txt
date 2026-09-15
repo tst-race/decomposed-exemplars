@@ -23,6 +23,7 @@ include_directories(${CURL_INCLUDE_DIR})
 # include(../../source/warnings.cmake.txt)
 
 add_executable(unitTestPluginCommsDecomposedCpp
+    ../../source/common/base64.cpp
     ../../source/common/log.cpp
     ../../source/encoding/PluginCommsTwoSixStubEncoding.cpp
     ../../source/transport/Link.cpp
@@ -77,12 +78,20 @@ if (TARGET raceSdkTestMocks)
     target_link_libraries(unitTestPluginCommsDecomposedCpp raceSdkTestMocks)
 endif()
 
-add_dependencies(build_plugin_comms_twosix_decomposed_cpp_tests unitTestPluginCommsDecomposedCpp)
+if (TARGET build_plugin_comms_twosix_decomposed_cpp_tests)
+    add_dependencies(build_plugin_comms_twosix_decomposed_cpp_tests unitTestPluginCommsDecomposedCpp)
+endif()
 add_test(plugin_comms_twosix_cpp_decomposed ${CMAKE_CURRENT_BINARY_DIR}/unitTestPluginCommsDecomposedCpp)
 set_tests_properties(plugin_comms_twosix_cpp_decomposed PROPERTIES LABELS "unit;plugin_comms_twosix_decomposed_cpp")
-setup_coverage_for_target(
-    TARGET unitTestPluginCommsDecomposedCpp
-    SOURCE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../..
-)
-setup_valgrind_for_target(unitTestPluginCommsDecomposedCpp)
-setup_clang_format_for_target(unitTestPluginCommsDecomposedCpp PARENT plugin_comms_twosix_decomposed_cpp)
+if (COMMAND setup_coverage_for_target)
+    setup_coverage_for_target(
+        TARGET unitTestPluginCommsDecomposedCpp
+        SOURCE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../..
+    )
+endif()
+if (COMMAND setup_valgrind_for_target)
+    setup_valgrind_for_target(unitTestPluginCommsDecomposedCpp)
+endif()
+if (COMMAND setup_clang_format_for_target)
+    setup_clang_format_for_target(unitTestPluginCommsDecomposedCpp PARENT plugin_comms_twosix_decomposed_cpp)
+endif()
