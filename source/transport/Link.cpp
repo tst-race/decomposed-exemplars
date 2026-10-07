@@ -80,12 +80,12 @@ ComponentStatus Link::dequeueContent(uint64_t actionId) {
 ComponentStatus Link::fetch() {
     TRACE_METHOD(linkId);
 
+    std::lock_guard<std::mutex> lock(mutex);
+
     if (isShutdown) {
         logError(logPrefix + "link has been shutdown: " + linkId);
         return COMPONENT_ERROR;
     }
-
-    std::lock_guard<std::mutex> lock(mutex);
 
     if (actionQueue.size() >= ACTION_QUEUE_MAX_CAPACITY) {
         logError(logPrefix + "action queue full for link: " + linkId);
@@ -100,13 +100,13 @@ ComponentStatus Link::fetch() {
 ComponentStatus Link::post(std::vector<RaceHandle> handles, uint64_t actionId) {
     TRACE_METHOD(linkId, handles, actionId);
 
+    std::lock_guard<std::mutex> lock(mutex);
+
     if (isShutdown) {
         logError(logPrefix + "link has been shutdown: " + linkId);
         updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
         return COMPONENT_ERROR;
     }
-
-    std::lock_guard<std::mutex> lock(mutex);
 
     if (actionQueue.size() >= ACTION_QUEUE_MAX_CAPACITY) {
         logError(logPrefix + "action queue full for link: " + linkId);
@@ -142,7 +142,12 @@ void Link::start() {
 
 void Link::shutdown() {
     TRACE_METHOD(linkId);
-    isShutdown = true;
+    {
+        // Serialize with fetch()/post() so an action can never be enqueued after the worker
+        // thread has already observed shutdown and exited.
+        std::lock_guard<std::mutex> lock(mutex);
+        isShutdown = true;
+    }
     conditionVariable.notify_one();
     if (thread.joinable()) {
         thread.join();

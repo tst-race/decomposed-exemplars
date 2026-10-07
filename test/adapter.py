@@ -14,10 +14,23 @@ import sys
 import uuid
 from pathlib import Path
 
-sys.path.insert(
-    0, str(Path(__file__).resolve().parents[2] / "raceboat" / "test" / "integration")
-)
-from adapter_types import NodeContribution, NodeRequest  # noqa: E402
+try:
+    # The orchestrator (raceboat/test/integration/generate_scenario.py) already puts its own
+    # directory on sys.path before loading this module, so this is expected to succeed whenever
+    # adapter.py is invoked as intended.
+    from adapter_types import NodeContribution, NodeRequest
+except ImportError:
+    # Fallback for standalone use (e.g. running this file directly): only works if raceboat is
+    # checked out as a sibling of this repository.
+    _integration_dir = Path(__file__).resolve().parents[2] / "raceboat" / "test" / "integration"
+    if not _integration_dir.is_dir():
+        raise ImportError(
+            "decomposed-exemplars adapter: could not import adapter_types. Either invoke this "
+            "module via raceboat/test/integration's orchestrator, or check out raceboat as a "
+            f"sibling of this repository (expected {_integration_dir})"
+        ) from None
+    sys.path.insert(0, str(_integration_dir))
+    from adapter_types import NodeContribution, NodeRequest  # noqa: E402
 
 # Default composition (see source/manifest.json "compositions"): transport is
 # twoSixIndirect, usermodel is rapidUser, encoding is base64. This is also the
