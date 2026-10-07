@@ -125,22 +125,29 @@ bool PluginCommsTwoSixStubTransport::preLinkCreate(const std::string &logPrefix,
 ComponentStatus PluginCommsTwoSixStubTransport::postLinkCreate(const std::string &logPrefix,
                                                                RaceHandle handle,
                                                                const LinkID &linkId,
-                                                               const std::shared_ptr<Link> &link,
+                                                               const LinkAddress &address,
+                                                               const LinkProperties &properties,
                                                                LinkStatus linkStatus) {
+    std::shared_ptr<Link> link;
+    {
+        // Construct and register the link as a single atomic step so a concurrent destroyLink()
+        // can never observe the linkId as neither pending nor yet present in links.
+        std::lock_guard<std::mutex> lock(linkStateMutex);
+        link = createLinkInstance(linkId, address, properties);
+        if (link != nullptr) {
+            if (deletedLinks.erase(linkId) != 0) {
+                // linkId is being reused; actions left over from the destroyed instance must not
+                // be allowed to resolve against the new link.
+                purgeStaleActionsForLinkLocked(logPrefix, linkId);
+            }
+            links.add(link);
+        }
+    }
+
     if (link == nullptr) {
         logError(logPrefix + "postLinkCreate: link was null");
         sdk->onLinkStatusChanged(handle, linkId, LINK_DESTROYED, {});
         return COMPONENT_ERROR;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(linkStateMutex);
-        if (deletedLinks.erase(linkId) != 0) {
-            // linkId is being reused; actions left over from the destroyed instance must not be
-            // allowed to resolve against the new link.
-            purgeStaleActionsForLinkLocked(logPrefix, linkId);
-        }
-        links.add(link);
     }
     sdk->onLinkStatusChanged(handle, linkId, linkStatus, {});
 
@@ -195,9 +202,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::createLink(RaceHandle handle,
 
     LinkProperties properties = defaultLinkProperties;
 
-    auto link = createLinkInstance(linkId, address, properties);
-
-    return postLinkCreate(logPrefix, handle, linkId, link, LINK_CREATED);
+    return postLinkCreate(logPrefix, handle, linkId, address, properties, LINK_CREATED);
 }
 
 ComponentStatus PluginCommsTwoSixStubTransport::loadLinkAddress(RaceHandle handle,
@@ -210,9 +215,8 @@ ComponentStatus PluginCommsTwoSixStubTransport::loadLinkAddress(RaceHandle handl
 
     LinkAddress address = nlohmann::json::parse(linkAddress);
     LinkProperties properties = defaultLinkProperties;
-    auto link = createLinkInstance(linkId, address, properties);
 
-    return postLinkCreate(logPrefix, handle, linkId, link, LINK_LOADED);
+    return postLinkCreate(logPrefix, handle, linkId, address, properties, LINK_LOADED);
 }
 
 ComponentStatus PluginCommsTwoSixStubTransport::loadLinkAddresses(
@@ -233,9 +237,8 @@ ComponentStatus PluginCommsTwoSixStubTransport::createLinkFromAddress(
 
     LinkAddress address = nlohmann::json::parse(linkAddress);
     LinkProperties properties = defaultLinkProperties;
-    auto link = createLinkInstance(linkId, address, properties);
 
-    return postLinkCreate(logPrefix, handle, linkId, link, LINK_CREATED);
+    return postLinkCreate(logPrefix, handle, linkId, address, properties, LINK_CREATED);
 }
 
 ComponentStatus PluginCommsTwoSixStubTransport::destroyLink(RaceHandle handle,

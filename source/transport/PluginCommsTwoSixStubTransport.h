@@ -94,8 +94,8 @@ private:
     bool preLinkCreate(const std::string &logPrefix, RaceHandle handle, const LinkID &linkId,
                        LinkSide invalidRoleLinkSide);
     ComponentStatus postLinkCreate(const std::string &logPrefix, RaceHandle handle,
-                                   const LinkID &linkId, const std::shared_ptr<Link> &link,
-                                   LinkStatus linkStatus);
+                                   const LinkID &linkId, const LinkAddress &address,
+                                   const LinkProperties &properties, LinkStatus linkStatus);
 
     // Returns true if linkId is tombstoned and the caller should skip the action. Must be called
     // while holding linkStateMutex.
