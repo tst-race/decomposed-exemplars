@@ -297,16 +297,22 @@ ComponentStatus PluginCommsTwoSixStubTransport::enqueueContent(
 
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
-        std::lock_guard<std::mutex> lock(linkStateMutex);
-        // If the action is for a wildcard link id, the component manager chooses the link and
-        // specifies it when calling enqueueContent(). Keep the mapping even if the link was
-        // deleted so doAction() can report attached package failures.
-        actionToLinkIdMap[action.actionId] = params.linkId;
+        std::shared_ptr<Link> link;
+        {
+            std::lock_guard<std::mutex> lock(linkStateMutex);
+            // If the action is for a wildcard link id, the component manager chooses the link and
+            // specifies it when calling enqueueContent(). Keep the mapping even if the link was
+            // deleted so doAction() can report attached package failures.
+            actionToLinkIdMap[action.actionId] = params.linkId;
 
-        if (isDeletedLocked(params.linkId)) {
-            logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
-                     " for deleted link " + params.linkId);
-            return COMPONENT_OK;
+            if (isDeletedLocked(params.linkId)) {
+                logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
+                         " for deleted link " + params.linkId);
+                return COMPONENT_OK;
+            }
+            if (actionParams.type == ACTION_POST) {
+                link = links.get(params.linkId);
+            }
         }
         switch (actionParams.type) {
             case ACTION_FETCH:
@@ -314,7 +320,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::enqueueContent(
                 return COMPONENT_OK;
 
             case ACTION_POST:
-                return links.get(params.linkId)->enqueueContent(action.actionId, content);
+                return link->enqueueContent(action.actionId, content);
 
             default:
                 logError(logPrefix +
@@ -333,21 +339,27 @@ ComponentStatus PluginCommsTwoSixStubTransport::dequeueContent(const Action &act
 
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
-        std::lock_guard<std::mutex> lock(linkStateMutex);
-        LinkID linkId = actionParams.linkId == "*" ? actionToLinkIdMap.at(action.actionId) :
-                                                     actionParams.linkId;
+        std::shared_ptr<Link> link;
+        {
+            std::lock_guard<std::mutex> lock(linkStateMutex);
+            LinkID linkId = actionParams.linkId == "*" ? actionToLinkIdMap.at(action.actionId) :
+                                                         actionParams.linkId;
 
-        if (isDeletedLocked(linkId)) {
-            logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
-                     " for deleted link " + linkId);
+            if (isDeletedLocked(linkId)) {
+                logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
+                         " for deleted link " + linkId);
+                actionToLinkIdMap.erase(action.actionId);
+                pruneDeletedLinkIfUnreferencedLocked(linkId);
+                return COMPONENT_OK;
+            }
             actionToLinkIdMap.erase(action.actionId);
-            pruneDeletedLinkIfUnreferencedLocked(linkId);
-            return COMPONENT_OK;
+            if (actionParams.type == ACTION_POST) {
+                link = links.get(linkId);
+            }
         }
-        actionToLinkIdMap.erase(action.actionId);
         switch (actionParams.type) {
             case ACTION_POST:
-                return links.get(linkId)->dequeueContent(action.actionId);
+                return link->dequeueContent(action.actionId);
 
             default:
                 // No content associated with any other action types
@@ -367,12 +379,15 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
         LinkID linkId = actionParams.linkId;
-        std::lock_guard<std::mutex> lock(linkStateMutex);
 
         switch (actionParams.type) {
-            case ACTION_FETCH:
-                // this map shouldn't contain anything in the fetch case, but just in case, erase it
-                actionToLinkIdMap.erase(action.actionId);
+            case ACTION_FETCH: {
+                {
+                    std::lock_guard<std::mutex> lock(linkStateMutex);
+                    // this map shouldn't contain anything in the fetch case, but just in case,
+                    // erase it
+                    actionToLinkIdMap.erase(action.actionId);
+                }
 
                 // This exemplar treats wildcard fetches as a fetch on EVERY link
                 // Real transports which do NOT "fetch" for all links in a single action
@@ -396,36 +411,54 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                     return status;
                 } else {
                     logInfo(logPrefix + "Fetching from single link");
-                    if (isDeletedLocked(linkId)) {
-                        logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
-                                 " for deleted link " + linkId);
-                        return COMPONENT_OK;
+                    std::shared_ptr<Link> link;
+                    {
+                        std::lock_guard<std::mutex> lock(linkStateMutex);
+                        if (isDeletedLocked(linkId)) {
+                            logDebug(logPrefix + "Ignoring action " +
+                                     std::to_string(action.actionId) + " for deleted link " +
+                                     linkId);
+                            return COMPONENT_OK;
+                        }
+                        link = links.get(linkId);
                     }
-                    return links.get(linkId)->fetch();
+                    return link->fetch();
                 }
+            }
 
-            case ACTION_POST:
-                if (linkId == "*") {
-                    auto it = actionToLinkIdMap.find(action.actionId);
-                    if (it == actionToLinkIdMap.end()) {
-                        logInfo(logPrefix +
-                                "Skipping action because no link exists for wildcard action");
-                        return COMPONENT_OK;
+            case ACTION_POST: {
+                std::shared_ptr<Link> link;
+                bool deleted = false;
+                {
+                    std::lock_guard<std::mutex> lock(linkStateMutex);
+                    if (linkId == "*") {
+                        auto it = actionToLinkIdMap.find(action.actionId);
+                        if (it == actionToLinkIdMap.end()) {
+                            logInfo(logPrefix +
+                                    "Skipping action because no link exists for wildcard action");
+                            return COMPONENT_OK;
+                        } else {
+                            linkId = it->second;
+                        }
+                    }
+                    actionToLinkIdMap.erase(action.actionId);
+                    deleted = isDeletedLocked(linkId);
+                    if (deleted) {
+                        pruneDeletedLinkIfUnreferencedLocked(linkId);
                     } else {
-                        linkId = it->second;
+                        link = links.get(linkId);
                     }
                 }
-                actionToLinkIdMap.erase(action.actionId);
-                if (isDeletedLocked(linkId)) {
+                if (deleted) {
                     logDebug(logPrefix + "Failing action " + std::to_string(action.actionId) +
                              " for deleted link " + linkId);
-                    pruneDeletedLinkIfUnreferencedLocked(linkId);
                     for (RaceHandle handle : handles) {
                         sdk->onPackageStatusChanged(handle, PACKAGE_FAILED_GENERIC);
                     }
                     return COMPONENT_OK;
                 }
-                return links.get(linkId)->post(std::move(handles), action.actionId);
+                return link->post(std::move(handles), action.actionId);
+            }
 
             default:
                 logError(logPrefix +
