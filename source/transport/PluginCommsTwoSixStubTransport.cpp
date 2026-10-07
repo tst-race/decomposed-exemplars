@@ -134,7 +134,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::postLinkCreate(const std::string
     }
 
     {
-        std::lock_guard<std::mutex> lock(deletedLinksMutex);
+        std::lock_guard<std::mutex> lock(linkStateMutex);
         deletedLinks.erase(linkId);
         links.add(link);
     }
@@ -229,7 +229,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::destroyLink(RaceHandle handle,
     {
         // Tombstone first so any action that races with this call observes the link as deleted
         // rather than possibly fetching it from links between the two operations.
-        std::lock_guard<std::mutex> lock(deletedLinksMutex);
+        std::lock_guard<std::mutex> lock(linkStateMutex);
         deletedLinks.insert(linkId);
         link = links.remove(linkId);
         if (not link) {
@@ -281,12 +281,12 @@ ComponentStatus PluginCommsTwoSixStubTransport::enqueueContent(
 
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
+        std::lock_guard<std::mutex> lock(linkStateMutex);
         // If the action is for a wildcard link id, the component manager chooses the link and
         // specifies it when calling enqueueContent(). Keep the mapping even if the link was
         // deleted so doAction() can report attached package failures.
         actionToLinkIdMap[action.actionId] = params.linkId;
 
-        std::lock_guard<std::mutex> lock(deletedLinksMutex);
         if (isDeletedLocked(params.linkId)) {
             logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
                      " for deleted link " + params.linkId);
@@ -317,10 +317,10 @@ ComponentStatus PluginCommsTwoSixStubTransport::dequeueContent(const Action &act
 
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
+        std::lock_guard<std::mutex> lock(linkStateMutex);
         LinkID linkId = actionParams.linkId == "*" ? actionToLinkIdMap.at(action.actionId) :
                                                      actionParams.linkId;
 
-        std::lock_guard<std::mutex> lock(deletedLinksMutex);
         if (isDeletedLocked(linkId)) {
             logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
                      " for deleted link " + linkId);
@@ -351,6 +351,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
         LinkID linkId = actionParams.linkId;
+        std::lock_guard<std::mutex> lock(linkStateMutex);
 
         switch (actionParams.type) {
             case ACTION_FETCH:
@@ -379,7 +380,6 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                     return status;
                 } else {
                     logInfo(logPrefix + "Fetching from single link");
-                    std::lock_guard<std::mutex> lock(deletedLinksMutex);
                     if (isDeletedLocked(linkId)) {
                         logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
                                  " for deleted link " + linkId);
@@ -400,19 +400,16 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                     }
                 }
                 actionToLinkIdMap.erase(action.actionId);
-                {
-                    std::lock_guard<std::mutex> lock(deletedLinksMutex);
-                    if (isDeletedLocked(linkId)) {
-                        logDebug(logPrefix + "Failing action " + std::to_string(action.actionId) +
-                                 " for deleted link " + linkId);
-                        pruneDeletedLinkIfUnreferencedLocked(linkId);
-                        for (RaceHandle handle : handles) {
-                            sdk->onPackageStatusChanged(handle, PACKAGE_FAILED_GENERIC);
-                        }
-                        return COMPONENT_OK;
+                if (isDeletedLocked(linkId)) {
+                    logDebug(logPrefix + "Failing action " + std::to_string(action.actionId) +
+                             " for deleted link " + linkId);
+                    pruneDeletedLinkIfUnreferencedLocked(linkId);
+                    for (RaceHandle handle : handles) {
+                        sdk->onPackageStatusChanged(handle, PACKAGE_FAILED_GENERIC);
                     }
-                    return links.get(linkId)->post(std::move(handles), action.actionId);
+                    return COMPONENT_OK;
                 }
+                return links.get(linkId)->post(std::move(handles), action.actionId);
 
             default:
                 logError(logPrefix +

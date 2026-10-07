@@ -77,9 +77,10 @@ private:
 
     LinkMap links;
 
-    // Guards deletedLinks and serializes it against links add/remove so a link can never be
-    // observed as both present in links and absent from deletedLinks (or vice versa).
-    mutable std::mutex deletedLinksMutex;
+    // Guards deletedLinks and actionToLinkIdMap, and serializes them against links add/remove so a
+    // link can never be observed as both present in links and absent from deletedLinks (or vice
+    // versa), and so actionToLinkIdMap lookups/erases cannot race with each other.
+    mutable std::mutex linkStateMutex;
     std::unordered_set<LinkID> deletedLinks;
 
     std::unordered_map<uint64_t, LinkID> actionToLinkIdMap;
@@ -97,12 +98,12 @@ private:
                                    LinkStatus linkStatus);
 
     // Returns true if linkId is tombstoned and the caller should skip the action. Must be called
-    // while holding deletedLinksMutex.
+    // while holding linkStateMutex.
     bool isDeletedLocked(const LinkID &linkId) const;
 
     // Drops the tombstone for linkId once no pending action still maps to it, to bound the set's
     // size instead of retaining every destroyed link ID indefinitely. Must be called while holding
-    // deletedLinksMutex.
+    // linkStateMutex.
     void pruneDeletedLinkIfUnreferencedLocked(const LinkID &linkId);
 };
 
