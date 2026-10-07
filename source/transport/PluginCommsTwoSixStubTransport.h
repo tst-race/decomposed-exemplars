@@ -105,6 +105,11 @@ private:
     // size instead of retaining every destroyed link ID indefinitely. Must be called while holding
     // linkStateMutex.
     void pruneDeletedLinkIfUnreferencedLocked(const LinkID &linkId);
+
+    // Erases any actionToLinkIdMap entries for linkId, so stale actions queued against a destroyed
+    // link instance can't be misapplied once the ID is reused by a newly created link. Must be
+    // called while holding linkStateMutex.
+    void purgeStaleActionsForLinkLocked(const LinkID &linkId);
 };
 
 #endif  // __COMMS_TWOSIX_TRANSPORT_H__
