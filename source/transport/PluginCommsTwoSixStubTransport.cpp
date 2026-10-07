@@ -138,7 +138,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::postLinkCreate(const std::string
         if (deletedLinks.erase(linkId) != 0) {
             // linkId is being reused; actions left over from the destroyed instance must not be
             // allowed to resolve against the new link.
-            purgeStaleActionsForLinkLocked(linkId);
+            purgeStaleActionsForLinkLocked(logPrefix, linkId);
         }
         links.add(link);
     }
@@ -151,7 +151,8 @@ bool PluginCommsTwoSixStubTransport::isDeletedLocked(const LinkID &linkId) const
     return deletedLinks.count(linkId) != 0;
 }
 
-void PluginCommsTwoSixStubTransport::purgeStaleActionsForLinkLocked(const LinkID &linkId) {
+void PluginCommsTwoSixStubTransport::purgeStaleActionsForLinkLocked(const std::string &logPrefix,
+                                                                     const LinkID &linkId) {
     for (auto it = actionToLinkIdMap.begin(); it != actionToLinkIdMap.end();) {
         if (it->second == linkId) {
             logDebug(logPrefix + "Dropping stale action " + std::to_string(it->first) +
