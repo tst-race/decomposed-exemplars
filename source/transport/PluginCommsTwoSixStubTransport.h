@@ -25,6 +25,7 @@
 #include <atomic>
 
 #include <algorithm>
+#include <mutex>
 #include <unordered_set>
 
 #include "LinkMap.h"
@@ -75,6 +76,10 @@ private:
     LinkProperties defaultLinkProperties;
 
     LinkMap links;
+
+    // Guards deletedLinks and serializes it against links add/remove so a link can never be
+    // observed as both present in links and absent from deletedLinks (or vice versa).
+    mutable std::mutex deletedLinksMutex;
     std::unordered_set<LinkID> deletedLinks;
 
     std::unordered_map<uint64_t, LinkID> actionToLinkIdMap;
@@ -90,6 +95,15 @@ private:
     ComponentStatus postLinkCreate(const std::string &logPrefix, RaceHandle handle,
                                    const LinkID &linkId, const std::shared_ptr<Link> &link,
                                    LinkStatus linkStatus);
+
+    // Returns true if linkId is tombstoned and the caller should skip the action. Must be called
+    // while holding deletedLinksMutex.
+    bool isDeletedLocked(const LinkID &linkId) const;
+
+    // Drops the tombstone for linkId once no pending action still maps to it, to bound the set's
+    // size instead of retaining every destroyed link ID indefinitely. Must be called while holding
+    // deletedLinksMutex.
+    void pruneDeletedLinkIfUnreferencedLocked(const LinkID &linkId);
 };
 
 #endif  // __COMMS_TWOSIX_TRANSPORT_H__
