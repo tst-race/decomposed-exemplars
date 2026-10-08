@@ -85,6 +85,11 @@ private:
 
     std::unordered_map<uint64_t, LinkID> actionToLinkIdMap;
 
+    // actionIds whose actionToLinkIdMap entry was dropped by purgeStaleActionsForLinkLocked()
+    // before doAction() could resolve them, so doAction() still knows to report a terminal
+    // package failure instead of silently skipping handles that were never otherwise failed.
+    std::unordered_set<uint64_t> staleActionIds;
+
     // Next available hashtag suffix.
     // TODO: should probably pull from a pool of tags (randomly generated?) instead so we can reuse
     // old tags. Although I'm guessing with a 64 bit int it's unlikely this will ever rollover

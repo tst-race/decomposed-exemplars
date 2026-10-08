@@ -164,6 +164,9 @@ void PluginCommsTwoSixStubTransport::purgeStaleActionsForLinkLocked(const std::s
         if (it->second == linkId) {
             logDebug(logPrefix + "Dropping stale action " + std::to_string(it->first) +
                      " for recreated link " + linkId);
+            // Record that this action still needs a terminal status, since its mapping is gone
+            // and doAction() can no longer resolve it to any link.
+            staleActionIds.insert(it->first);
             it = actionToLinkIdMap.erase(it);
         } else {
             ++it;
@@ -393,11 +396,10 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
             case ACTION_FETCH: {
                 {
                     std::lock_guard<std::mutex> lock(linkStateMutex);
-                    auto it = actionToLinkIdMap.find(action.actionId);
-                    const LinkID mappedLinkId =
-                        it != actionToLinkIdMap.end() ? it->second : actionParams.linkId;
+                    // this map shouldn't contain anything in the fetch case, but just in case,
+                    // erase it. Do not prune here: that must happen after the deleted-link check
+                    // below uses the actual target linkId, not before it.
                     actionToLinkIdMap.erase(action.actionId);
-                    pruneDeletedLinkIfUnreferencedLocked(mappedLinkId);
                 }
 
                 // This exemplar treats wildcard fetches as a fetch on EVERY link
@@ -443,28 +445,39 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
 
             case ACTION_POST: {
                 std::shared_ptr<Link> link;
-                bool deleted = false;
+                bool failHandles = false;
+                bool noDestination = false;
                 {
                     std::lock_guard<std::mutex> lock(linkStateMutex);
                     if (linkId == "*") {
                         auto it = actionToLinkIdMap.find(action.actionId);
-                        if (it == actionToLinkIdMap.end()) {
-                            logInfo(logPrefix +
-                                    "Skipping action because no link exists for wildcard action");
-                            return COMPONENT_OK;
-                        } else {
+                        if (it != actionToLinkIdMap.end()) {
                             linkId = it->second;
+                        } else if (staleActionIds.erase(action.actionId) != 0) {
+                            // The link this action resolved to was destroyed (and possibly its ID
+                            // reused) before doAction() ran; the handles still need a terminal
+                            // status even though there's no mapping left to resolve them.
+                            failHandles = true;
+                        } else {
+                            noDestination = true;
                         }
                     }
-                    actionToLinkIdMap.erase(action.actionId);
-                    deleted = isDeletedLocked(linkId);
-                    if (deleted) {
-                        pruneDeletedLinkIfUnreferencedLocked(linkId);
-                    } else {
-                        link = links.get(linkId);
+                    if (not noDestination and not failHandles) {
+                        actionToLinkIdMap.erase(action.actionId);
+                        failHandles = isDeletedLocked(linkId);
+                        if (failHandles) {
+                            pruneDeletedLinkIfUnreferencedLocked(linkId);
+                        } else {
+                            link = links.get(linkId);
+                        }
                     }
                 }
-                if (deleted) {
+                if (noDestination) {
+                    logInfo(logPrefix +
+                            "Skipping action because no link exists for wildcard action");
+                    return COMPONENT_OK;
+                }
+                if (failHandles) {
                     logDebug(logPrefix + "Failing action " + std::to_string(action.actionId) +
                              " for deleted link " + linkId);
                     for (RaceHandle handle : handles) {
