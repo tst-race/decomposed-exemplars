@@ -171,6 +171,9 @@ void Link::runActionThread() {
 
         auto action = actionQueue.front();
         actionQueue.pop_front();
+        // Release the lock before processing so shutdown() (which also takes this lock) isn't
+        // blocked behind a slow network fetch/post.
+        lock.unlock();
 
         if (action.post) {
             postOnActionThread(action.handles, action.actionId);
@@ -333,18 +336,25 @@ void Link::postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t a
     TRACE_METHOD(linkId, handles, actionId);
     logPrefix += linkId + ": ";
 
-    auto iter = contentQueue.find(actionId);
-    if (iter == contentQueue.end()) {
-        // We really shouldn't get here, since we already check for this before queueing the action,
-        // but just in case...
-        logError(logPrefix +
-                 "no enqueued content for given action ID: " + std::to_string(actionId));
-        updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
-        return;
+    std::vector<uint8_t> content;
+    {
+        // contentQueue is no longer implicitly protected by the caller holding mutex, since the
+        // worker thread releases it before invoking this.
+        std::lock_guard<std::mutex> lock(mutex);
+        auto iter = contentQueue.find(actionId);
+        if (iter == contentQueue.end()) {
+            // We really shouldn't get here, since we already check for this before queueing the
+            // action, but just in case...
+            logError(logPrefix +
+                     "no enqueued content for given action ID: " + std::to_string(actionId));
+            updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
+            return;
+        }
+        content = iter->second;
     }
 
-    logDebug("hash of post " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(iter->second.begin(), iter->second.end()))));
-    std::string message = base64::encode(iter->second);
+    logDebug("hash of post " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(content.begin(), content.end()))));
+    std::string message = base64::encode(content);
     auto msgHash = postedMessageHashes.addMessage(message);
 
     int tries = 0;

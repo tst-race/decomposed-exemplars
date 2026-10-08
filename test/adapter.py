@@ -109,6 +109,22 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
         sidecar_services=dict(SIDECAR_SERVICES),
     )
 
+    # request.direction is only set (non-None) when this slot has been split
+    # into two genuinely independent channels/compositions, one per
+    # direction (see adapter_types.NodeRequest.direction). In that case, only
+    # the listener's "recv" link and the connector's "send" link get an
+    # explicit, out-of-band-published address; the other direction on each
+    # side is established dynamically per-connection (the listener loads a
+    # reply link address embedded in the dialer's hello message, and the
+    # dialer self-creates its recv link and advertises it the same way - see
+    # raceboat/source/state-machine/DialStateMachine.cpp's StateDialSendOpen
+    # and ListenStateMachine.cpp's StateListenWaitingForSendConnection).
+    is_dynamic_direction = request.direction == "send" if request.role == "listener" else (
+        request.direction == "recv" if request.role == "connector" else False
+    )
+    if is_dynamic_direction:
+        return contribution
+
     if request.role == "listener":
         # createLink()'s default hashtag is derived from the running race
         # persona (see PluginCommsTwoSixStubTransport.cpp), which we can't
@@ -134,3 +150,4 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
         raise ValueError(f"decomposed-exemplars adapter: unknown role '{request.role}'")
 
     return contribution
+
