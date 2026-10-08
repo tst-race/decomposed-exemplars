@@ -94,7 +94,7 @@ def kit_dir(role: str) -> Path:
         plugin_root
         / "kit"
         / "artifacts"
-        / f"linux-{_detect_host_architecture()}-server"
+/ f"linux-{_detect_host_architecture()}-{'client' if role == 'connector' else 'server'}"
         / KIT_NAME
     )
 
