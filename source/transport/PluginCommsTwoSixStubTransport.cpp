@@ -393,9 +393,11 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
             case ACTION_FETCH: {
                 {
                     std::lock_guard<std::mutex> lock(linkStateMutex);
-                    // this map shouldn't contain anything in the fetch case, but just in case,
-                    // erase it
+                    auto it = actionToLinkIdMap.find(action.actionId);
+                    const LinkID mappedLinkId =
+                        it != actionToLinkIdMap.end() ? it->second : actionParams.linkId;
                     actionToLinkIdMap.erase(action.actionId);
+                    pruneDeletedLinkIfUnreferencedLocked(mappedLinkId);
                 }
 
                 // This exemplar treats wildcard fetches as a fetch on EVERY link
