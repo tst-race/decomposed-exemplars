@@ -449,15 +449,16 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                 bool noDestination = false;
                 {
                     std::lock_guard<std::mutex> lock(linkStateMutex);
-                    if (linkId == "*") {
+                    if (staleActionIds.erase(action.actionId) != 0) {
+                        // This action's destination link was destroyed (and its ID possibly
+                        // reused) before doAction() ran; it still needs a terminal status even
+                        // though its mapping is gone, whether it targeted a specific link or a
+                        // wildcard.
+                        failHandles = true;
+                    } else if (linkId == "*") {
                         auto it = actionToLinkIdMap.find(action.actionId);
                         if (it != actionToLinkIdMap.end()) {
                             linkId = it->second;
-                        } else if (staleActionIds.erase(action.actionId) != 0) {
-                            // The link this action resolved to was destroyed (and possibly its ID
-                            // reused) before doAction() ran; the handles still need a terminal
-                            // status even though there's no mapping left to resolve them.
-                            failHandles = true;
                         } else {
                             noDestination = true;
                         }

@@ -226,3 +226,23 @@ TEST_F(TestPluginCommsTwoSixStubTransport,
     EXPECT_CALL(sdk, onPackageStatusChanged(7u, PACKAGE_FAILED_GENERIC));
     ASSERT_EQ(COMPONENT_OK, transport->doAction({7u}, action));
 }
+
+TEST_F(TestPluginCommsTwoSixStubTransport,
+       should_fail_post_handles_for_explicit_link_recreated_before_doAction) {
+    auto transport = createTransport();
+    ASSERT_EQ(COMPONENT_OK, transport->createLink(2u, "LinkID_2"));
+
+    Action action{8675309, 42, "{\"linkId\":\"LinkID_2\",\"type\":\"post\"}"};
+    EncodingParameters encodeParams{"LinkID_2", "*/*", true, ""};
+    ASSERT_EQ(COMPONENT_OK, transport->enqueueContent(encodeParams, action, {0x31}));
+
+    // Destroy and recreate the same link ID before doAction() runs, so the action queued above
+    // is now stale relative to the new link instance.
+    EXPECT_CALL(*mockLinks["LinkID_2"], shutdown());
+    ASSERT_EQ(COMPONENT_OK, transport->destroyLink(3u, "LinkID_2"));
+    ASSERT_EQ(COMPONENT_OK, transport->createLink(4u, "LinkID_2"));
+
+    EXPECT_CALL(*mockLinks["LinkID_2"], post(::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(sdk, onPackageStatusChanged(7u, PACKAGE_FAILED_GENERIC));
+    ASSERT_EQ(COMPONENT_OK, transport->doAction({7u}, action));
+}
