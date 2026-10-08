@@ -85,7 +85,10 @@ def _detect_host_architecture() -> str:
     )
 
 
-def _kit_dir() -> Path:
+def kit_dir(role: str) -> Path:
+    # Both roles currently share the same built artifacts for this plugin
+    # (role is accepted only to satisfy the adapter contract - see
+    # adapter_types.py docstring).
     plugin_root = Path(__file__).resolve().parents[1]
     return (
         plugin_root
@@ -105,7 +108,7 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
     contribution = NodeContribution(
         params={},
         channel_name=composition,
-        kit_dir=_kit_dir(),
+        kit_dir=kit_dir(request.role),
         sidecar_services=dict(SIDECAR_SERVICES),
     )
 
