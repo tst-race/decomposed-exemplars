@@ -248,14 +248,18 @@ ComponentStatus PluginCommsTwoSixStubTransport::destroyLink(RaceHandle handle,
     std::shared_ptr<Link> link;
     {
         // Tombstone first so any action that races with this call observes the link as deleted
-        // rather than possibly fetching it from links between the two operations.
+        // rather than possibly fetching it from links between the two operations. The tombstone
+        // is intentionally retained until linkId is reused (see postLinkCreate) rather than
+        // pruned here: explicit (non-wildcard) doAction()/enqueueContent() calls never register
+        // in actionToLinkIdMap, so pruning based on that map alone cannot tell whether such an
+        // action is still in flight for this linkId.
         std::lock_guard<std::mutex> lock(linkStateMutex);
         deletedLinks.insert(linkId);
         link = links.remove(linkId);
-        // Keep the tombstone only while a pending action still references linkId - whether or
-        // not this call actually removed a link - instead of leaking it forever or dropping a
-        // tombstone that a stale action still depends on.
-        pruneDeletedLinkIfUnreferencedLocked(linkId);
+        if (not link) {
+            // Nothing was actually destroyed, so there's nothing to tombstone.
+            deletedLinks.erase(linkId);
+        }
     }
     if (not link) {
         logError(logPrefix + "link with ID '" + linkId + "' does not exist");
