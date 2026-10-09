@@ -167,6 +167,20 @@ TEST_F(TestLinkActionThread, post_action_content_survives_racing_dequeue_content
     waitForActionToBeExecuted();
 }
 
+TEST_F(TestLinkActionThread, shutdown_drains_already_queued_post_before_exiting) {
+    EXPECT_CALL(link, postOnActionThread(std::vector<RaceHandle>{3}, 14, std::vector<uint8_t>{0x12, 0x34}))
+        .WillOnce(::testing::Invoke([this](auto, auto, auto) { markActionExecuted(); }));
+
+    link.start();
+
+    ASSERT_EQ(COMPONENT_OK, link.enqueueContent(14, {0x12, 0x34}));
+    ASSERT_EQ(COMPONENT_OK, link.post({3}, 14));
+    // shutdown() blocks on thread.join(); by the time it returns, the worker must have drained
+    // the action queued above rather than exiting as soon as isShutdown is observed.
+    link.shutdown();
+    ASSERT_TRUE(actionExecuted);
+}
+
 class LinkToTestActions : public Link {
 public:
     using Link::Link;

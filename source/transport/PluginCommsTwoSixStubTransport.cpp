@@ -431,10 +431,11 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                             logDebug(logPrefix + "Ignoring action " +
                                      std::to_string(action.actionId) + " for deleted link " +
                                      linkId);
-                            // Explicit fetches never register in actionToLinkIdMap, so this is
-                            // the only point at which we know this tombstone was actually
-                            // observed and can safely be pruned.
-                            pruneDeletedLinkIfUnreferencedLocked(linkId);
+                            // Do NOT prune here: explicit fetches are never tracked in
+                            // actionToLinkIdMap, so another in-flight explicit action for the same
+                            // linkId could still need this tombstone. Retain it until the linkId
+                            // is reused (see postLinkCreate), which is the only point at which we
+                            // know no old action can still be pending against it.
                             return COMPONENT_OK;
                         }
                         link = links.get(linkId);

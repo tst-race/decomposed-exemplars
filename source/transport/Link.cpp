@@ -163,13 +163,18 @@ void Link::runActionThread() {
 
     int latest = getInitialIndex();
 
-    while (not isShutdown) {
+    while (true) {
         std::unique_lock<std::mutex> lock(mutex);
         conditionVariable.wait(lock, [this] { return isShutdown or not actionQueue.empty(); });
 
-        if (isShutdown) {
-            logDebug(logPrefix + "shutting down");
-            break;
+        if (actionQueue.empty()) {
+            // Only exit once every action accepted before shutdown has been drained; otherwise an
+            // action queued right before shutdown() set the flag would be silently dropped.
+            if (isShutdown) {
+                logDebug(logPrefix + "shutting down");
+                break;
+            }
+            continue;
         }
 
         auto action = actionQueue.front();
