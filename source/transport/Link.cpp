@@ -114,7 +114,8 @@ ComponentStatus Link::post(std::vector<RaceHandle> handles, uint64_t actionId) {
         return COMPONENT_ERROR;
     }
 
-    if (contentQueue.find(actionId) == contentQueue.end()) {
+    auto contentIter = contentQueue.find(actionId);
+    if (contentIter == contentQueue.end()) {
         // TODO: what's the correct log level. We want it to be an error(?) for performer encodings,
         // but this is expected for our own comms plugin.
         logInfo(logPrefix + "no enqueued content for given action ID: " + std::to_string(actionId));
@@ -130,7 +131,9 @@ ComponentStatus Link::post(std::vector<RaceHandle> handles, uint64_t actionId) {
         return COMPONENT_OK;
     }
 
-    actionQueue.push_back({true, std::move(handles), actionId});
+    // Copy the content into the queued action now, while still holding the lock, so a
+    // concurrent dequeueContent() erasing contentQueue can't race with the worker thread.
+    actionQueue.push_back({true, std::move(handles), actionId, contentIter->second});
     conditionVariable.notify_one();
     return COMPONENT_OK;
 }
@@ -176,7 +179,7 @@ void Link::runActionThread() {
         lock.unlock();
 
         if (action.post) {
-            postOnActionThread(action.handles, action.actionId);
+            postOnActionThread(action.handles, action.actionId, action.content);
         } else {
             latest = fetchOnActionThread(latest);
         }
@@ -332,26 +335,10 @@ std::tuple<std::vector<std::string>, int, double> Link::getNewPosts(int latestIn
             std::stod(responseJson.at("timestamp").get<std::string>())};
 }
 
-void Link::postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t actionId) {
+void Link::postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t actionId,
+                               const std::vector<uint8_t> &content) {
     TRACE_METHOD(linkId, handles, actionId);
     logPrefix += linkId + ": ";
-
-    std::vector<uint8_t> content;
-    {
-        // contentQueue is no longer implicitly protected by the caller holding mutex, since the
-        // worker thread releases it before invoking this.
-        std::lock_guard<std::mutex> lock(mutex);
-        auto iter = contentQueue.find(actionId);
-        if (iter == contentQueue.end()) {
-            // We really shouldn't get here, since we already check for this before queueing the
-            // action, but just in case...
-            logError(logPrefix +
-                     "no enqueued content for given action ID: " + std::to_string(actionId));
-            updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
-            return;
-        }
-        content = iter->second;
-    }
 
     logDebug("hash of post " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(content.begin(), content.end()))));
     std::string message = base64::encode(content);

@@ -104,7 +104,8 @@ public:
     virtual void shutdown();
 
 protected:
-    virtual void postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t actionId);
+    virtual void postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t actionId,
+                                    const std::vector<uint8_t> &content);
     virtual bool postToWhiteboard(const std::string &message);
 
     virtual int getInitialIndex();
@@ -125,6 +126,9 @@ private:
         bool post;
         std::vector<RaceHandle> handles;
         uint64_t actionId;
+        // Copied from contentQueue when the action is queued (only meaningful when post is true),
+        // so a later dequeueContent() erasing contentQueue can't race with the worker thread.
+        std::vector<uint8_t> content;
     };
 
     std::thread thread;

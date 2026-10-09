@@ -92,7 +92,9 @@ public:
     MOCK_METHOD(int, getInitialIndex, (), (override));
     MOCK_METHOD(int, fetchOnActionThread, (int latestIndex), (override));
     MOCK_METHOD(void, postOnActionThread,
-                (const std::vector<RaceHandle> &handles, uint64_t actionId), (override));
+                (const std::vector<RaceHandle> &handles, uint64_t actionId,
+                 const std::vector<uint8_t> &content),
+                (override));
 };
 
 class TestLinkActionThread : public ::testing::Test {
@@ -141,13 +143,27 @@ TEST_F(TestLinkActionThread, action_thread_should_execute_queued_fetch_action) {
 }
 
 TEST_F(TestLinkActionThread, action_thread_should_execute_queued_post_action) {
-    EXPECT_CALL(link, postOnActionThread(std::vector<RaceHandle>{3}, 14))
-        .WillOnce(::testing::Invoke([this](auto, auto) { markActionExecuted(); }));
+    EXPECT_CALL(link, postOnActionThread(std::vector<RaceHandle>{3}, 14, std::vector<uint8_t>{0x12, 0x34}))
+        .WillOnce(::testing::Invoke([this](auto, auto, auto) { markActionExecuted(); }));
 
     link.start();
 
     ASSERT_EQ(COMPONENT_OK, link.enqueueContent(14, {0x12, 0x34}));
     ASSERT_EQ(COMPONENT_OK, link.post({3}, 14));
+    waitForActionToBeExecuted();
+}
+
+TEST_F(TestLinkActionThread, post_action_content_survives_racing_dequeue_content) {
+    EXPECT_CALL(link, postOnActionThread(std::vector<RaceHandle>{3}, 14, std::vector<uint8_t>{0x12, 0x34}))
+        .WillOnce(::testing::Invoke([this](auto, auto, auto) { markActionExecuted(); }));
+
+    link.start();
+
+    ASSERT_EQ(COMPONENT_OK, link.enqueueContent(14, {0x12, 0x34}));
+    ASSERT_EQ(COMPONENT_OK, link.post({3}, 14));
+    // Simulate dequeueContent() winning the race with the worker thread processing the already
+    // queued post; the content must already be pinned in the queued action, not read from here.
+    ASSERT_EQ(COMPONENT_OK, link.dequeueContent(14));
     waitForActionToBeExecuted();
 }
 
@@ -277,7 +293,7 @@ TEST_F(TestLinkActions, post_max_retries) {
         .WillRepeatedly(::testing::Return(false));
     EXPECT_CALL(sdk, onPackageStatusChanged(4, PACKAGE_FAILED_GENERIC));
     ASSERT_EQ(COMPONENT_OK, link->enqueueContent(7, {0x12, 0x34}));
-    link->postOnActionThread({4}, 7);
+    link->postOnActionThread({4}, 7, {0x12, 0x34});
 }
 
 TEST_F(TestLinkActions, post_success) {
@@ -289,5 +305,5 @@ TEST_F(TestLinkActions, post_success) {
     EXPECT_CALL(*link, postToWhiteboard(messageBase64)).WillOnce(::testing::Return(true));
     EXPECT_CALL(sdk, onPackageStatusChanged(4, PACKAGE_SENT));
     ASSERT_EQ(COMPONENT_OK, link->enqueueContent(7, {message.begin(), message.end()}));
-    link->postOnActionThread({4}, 7);
+    link->postOnActionThread({4}, 7, {message.begin(), message.end()});
 }
