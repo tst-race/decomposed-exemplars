@@ -125,18 +125,62 @@ bool PluginCommsTwoSixStubTransport::preLinkCreate(const std::string &logPrefix,
 ComponentStatus PluginCommsTwoSixStubTransport::postLinkCreate(const std::string &logPrefix,
                                                                RaceHandle handle,
                                                                const LinkID &linkId,
-                                                               const std::shared_ptr<Link> &link,
+                                                               const LinkAddress &address,
+                                                               const LinkProperties &properties,
                                                                LinkStatus linkStatus) {
+    std::shared_ptr<Link> link;
+    {
+        // Construct and register the link as a single atomic step so a concurrent destroyLink()
+        // can never observe the linkId as neither pending nor yet present in links.
+        std::lock_guard<std::mutex> lock(linkStateMutex);
+        link = createLinkInstance(linkId, address, properties);
+        if (link != nullptr) {
+            if (deletedLinks.erase(linkId) != 0) {
+                // linkId is being reused; actions left over from the destroyed instance must not
+                // be allowed to resolve against the new link.
+                purgeStaleActionsForLinkLocked(logPrefix, linkId);
+            }
+            links.add(link);
+        }
+    }
+
     if (link == nullptr) {
         logError(logPrefix + "postLinkCreate: link was null");
         sdk->onLinkStatusChanged(handle, linkId, LINK_DESTROYED, {});
         return COMPONENT_ERROR;
     }
-
-    links.add(link);
     sdk->onLinkStatusChanged(handle, linkId, linkStatus, {});
 
     return COMPONENT_OK;
+}
+
+bool PluginCommsTwoSixStubTransport::isDeletedLocked(const LinkID &linkId) const {
+    return deletedLinks.count(linkId) != 0;
+}
+
+void PluginCommsTwoSixStubTransport::purgeStaleActionsForLinkLocked(const std::string &logPrefix,
+                                                                     const LinkID &linkId) {
+    for (auto it = actionToLinkIdMap.begin(); it != actionToLinkIdMap.end();) {
+        if (it->second == linkId) {
+            logDebug(logPrefix + "Dropping stale action " + std::to_string(it->first) +
+                     " for recreated link " + linkId);
+            // Record that this action still needs a terminal status, since its mapping is gone
+            // and doAction() can no longer resolve it to any link.
+            staleActionIds.insert(it->first);
+            it = actionToLinkIdMap.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void PluginCommsTwoSixStubTransport::pruneDeletedLinkIfUnreferencedLocked(const LinkID &linkId) {
+    for (auto &entry : actionToLinkIdMap) {
+        if (entry.second == linkId) {
+            return;
+        }
+    }
+    deletedLinks.erase(linkId);
 }
 
 std::shared_ptr<Link> PluginCommsTwoSixStubTransport::createLinkInstance(
@@ -161,9 +205,7 @@ ComponentStatus PluginCommsTwoSixStubTransport::createLink(RaceHandle handle,
 
     LinkProperties properties = defaultLinkProperties;
 
-    auto link = createLinkInstance(linkId, address, properties);
-
-    return postLinkCreate(logPrefix, handle, linkId, link, LINK_CREATED);
+    return postLinkCreate(logPrefix, handle, linkId, address, properties, LINK_CREATED);
 }
 
 ComponentStatus PluginCommsTwoSixStubTransport::loadLinkAddress(RaceHandle handle,
@@ -176,9 +218,8 @@ ComponentStatus PluginCommsTwoSixStubTransport::loadLinkAddress(RaceHandle handl
 
     LinkAddress address = nlohmann::json::parse(linkAddress);
     LinkProperties properties = defaultLinkProperties;
-    auto link = createLinkInstance(linkId, address, properties);
 
-    return postLinkCreate(logPrefix, handle, linkId, link, LINK_LOADED);
+    return postLinkCreate(logPrefix, handle, linkId, address, properties, LINK_LOADED);
 }
 
 ComponentStatus PluginCommsTwoSixStubTransport::loadLinkAddresses(
@@ -199,16 +240,30 @@ ComponentStatus PluginCommsTwoSixStubTransport::createLinkFromAddress(
 
     LinkAddress address = nlohmann::json::parse(linkAddress);
     LinkProperties properties = defaultLinkProperties;
-    auto link = createLinkInstance(linkId, address, properties);
 
-    return postLinkCreate(logPrefix, handle, linkId, link, LINK_CREATED);
+    return postLinkCreate(logPrefix, handle, linkId, address, properties, LINK_CREATED);
 }
 
 ComponentStatus PluginCommsTwoSixStubTransport::destroyLink(RaceHandle handle,
                                                             const LinkID &linkId) {
     TRACE_METHOD(handle, linkId);
 
-    auto link = links.remove(linkId);
+    std::shared_ptr<Link> link;
+    {
+        // Tombstone first so any action that races with this call observes the link as deleted
+        // rather than possibly fetching it from links between the two operations. The tombstone
+        // is intentionally retained until linkId is reused (see postLinkCreate) rather than
+        // pruned here: explicit (non-wildcard) doAction()/enqueueContent() calls never register
+        // in actionToLinkIdMap, so pruning based on that map alone cannot tell whether such an
+        // action is still in flight for this linkId.
+        std::lock_guard<std::mutex> lock(linkStateMutex);
+        deletedLinks.insert(linkId);
+        link = links.remove(linkId);
+        if (not link) {
+            // Nothing was actually destroyed, so there's nothing to tombstone.
+            deletedLinks.erase(linkId);
+        }
+    }
     if (not link) {
         logError(logPrefix + "link with ID '" + linkId + "' does not exist");
         return COMPONENT_ERROR;
@@ -254,16 +309,30 @@ ComponentStatus PluginCommsTwoSixStubTransport::enqueueContent(
 
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
-        // If the action is for a wildcard link id, the component manager chooses the link and
-        // specifies it when calling enqueueContent()
-        actionToLinkIdMap[action.actionId] = params.linkId;
+        std::shared_ptr<Link> link;
+        {
+            std::lock_guard<std::mutex> lock(linkStateMutex);
+            // If the action is for a wildcard link id, the component manager chooses the link and
+            // specifies it when calling enqueueContent(). Keep the mapping even if the link was
+            // deleted so doAction() can report attached package failures.
+            actionToLinkIdMap[action.actionId] = params.linkId;
+
+            if (isDeletedLocked(params.linkId)) {
+                logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
+                         " for deleted link " + params.linkId);
+                return COMPONENT_OK;
+            }
+            if (actionParams.type == ACTION_POST) {
+                link = links.get(params.linkId);
+            }
+        }
         switch (actionParams.type) {
             case ACTION_FETCH:
                 // Nothing to be queued
                 return COMPONENT_OK;
 
             case ACTION_POST:
-                return links.get(params.linkId)->enqueueContent(action.actionId, content);
+                return link->enqueueContent(action.actionId, content);
 
             default:
                 logError(logPrefix +
@@ -282,12 +351,27 @@ ComponentStatus PluginCommsTwoSixStubTransport::dequeueContent(const Action &act
 
     try {
         ActionJson actionParams = nlohmann::json::parse(action.json);
-        LinkID linkId = actionParams.linkId == "*" ? actionToLinkIdMap.at(action.actionId) :
-                                                     actionParams.linkId;
-        actionToLinkIdMap.erase(action.actionId);
+        std::shared_ptr<Link> link;
+        {
+            std::lock_guard<std::mutex> lock(linkStateMutex);
+            LinkID linkId = actionParams.linkId == "*" ? actionToLinkIdMap.at(action.actionId) :
+                                                         actionParams.linkId;
+
+            if (isDeletedLocked(linkId)) {
+                logDebug(logPrefix + "Ignoring action " + std::to_string(action.actionId) +
+                         " for deleted link " + linkId);
+                actionToLinkIdMap.erase(action.actionId);
+                pruneDeletedLinkIfUnreferencedLocked(linkId);
+                return COMPONENT_OK;
+            }
+            actionToLinkIdMap.erase(action.actionId);
+            if (actionParams.type == ACTION_POST) {
+                link = links.get(linkId);
+            }
+        }
         switch (actionParams.type) {
             case ACTION_POST:
-                return links.get(linkId)->dequeueContent(action.actionId);
+                return link->dequeueContent(action.actionId);
 
             default:
                 // No content associated with any other action types
@@ -309,9 +393,14 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
         LinkID linkId = actionParams.linkId;
 
         switch (actionParams.type) {
-            case ACTION_FETCH:
-                // this map shouldn't contain anything in the fetch case, but just in case, erase it
-                actionToLinkIdMap.erase(action.actionId);
+            case ACTION_FETCH: {
+                {
+                    std::lock_guard<std::mutex> lock(linkStateMutex);
+                    // this map shouldn't contain anything in the fetch case, but just in case,
+                    // erase it. Do not prune here: that must happen after the deleted-link check
+                    // below uses the actual target linkId, not before it.
+                    actionToLinkIdMap.erase(action.actionId);
+                }
 
                 // This exemplar treats wildcard fetches as a fetch on EVERY link
                 // Real transports which do NOT "fetch" for all links in a single action
@@ -335,22 +424,71 @@ ComponentStatus PluginCommsTwoSixStubTransport::doAction(const std::vector<RaceH
                     return status;
                 } else {
                     logInfo(logPrefix + "Fetching from single link");
-                    return links.get(linkId)->fetch();
+                    std::shared_ptr<Link> link;
+                    {
+                        std::lock_guard<std::mutex> lock(linkStateMutex);
+                        if (isDeletedLocked(linkId)) {
+                            logDebug(logPrefix + "Ignoring action " +
+                                     std::to_string(action.actionId) + " for deleted link " +
+                                     linkId);
+                            // Do NOT prune here: explicit fetches are never tracked in
+                            // actionToLinkIdMap, so another in-flight explicit action for the same
+                            // linkId could still need this tombstone. Retain it until the linkId
+                            // is reused (see postLinkCreate), which is the only point at which we
+                            // know no old action can still be pending against it.
+                            return COMPONENT_OK;
+                        }
+                        link = links.get(linkId);
+                    }
+                    return link->fetch();
                 }
+            }
 
-            case ACTION_POST:
-                if (linkId == "*") {
-                    auto it = actionToLinkIdMap.find(action.actionId);
-                    if (it == actionToLinkIdMap.end()) {
-                        logInfo(logPrefix +
-                                "Skipping action because no link exists for wildcard action");
-                        return COMPONENT_OK;
-                    } else {
-                        linkId = it->second;
+            case ACTION_POST: {
+                std::shared_ptr<Link> link;
+                bool failHandles = false;
+                bool noDestination = false;
+                {
+                    std::lock_guard<std::mutex> lock(linkStateMutex);
+                    if (staleActionIds.erase(action.actionId) != 0) {
+                        // This action's destination link was destroyed (and its ID possibly
+                        // reused) before doAction() ran; it still needs a terminal status even
+                        // though its mapping is gone, whether it targeted a specific link or a
+                        // wildcard.
+                        failHandles = true;
+                    } else if (linkId == "*") {
+                        auto it = actionToLinkIdMap.find(action.actionId);
+                        if (it != actionToLinkIdMap.end()) {
+                            linkId = it->second;
+                        } else {
+                            noDestination = true;
+                        }
+                    }
+                    if (not noDestination and not failHandles) {
+                        actionToLinkIdMap.erase(action.actionId);
+                        failHandles = isDeletedLocked(linkId);
+                        if (failHandles) {
+                            pruneDeletedLinkIfUnreferencedLocked(linkId);
+                        } else {
+                            link = links.get(linkId);
+                        }
                     }
                 }
-                actionToLinkIdMap.erase(action.actionId);
-                return links.get(linkId)->post(std::move(handles), action.actionId);
+                if (noDestination) {
+                    logInfo(logPrefix +
+                            "Skipping action because no link exists for wildcard action");
+                    return COMPONENT_OK;
+                }
+                if (failHandles) {
+                    logDebug(logPrefix + "Failing action " + std::to_string(action.actionId) +
+                             " for deleted link " + linkId);
+                    for (RaceHandle handle : handles) {
+                        sdk->onPackageStatusChanged(handle, PACKAGE_FAILED_GENERIC);
+                    }
+                    return COMPONENT_OK;
+                }
+                return link->post(std::move(handles), action.actionId);
+            }
 
             default:
                 logError(logPrefix +

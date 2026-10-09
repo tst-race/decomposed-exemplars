@@ -217,6 +217,8 @@ docker run --rm \
     -v "${FILEPATH}":/code \
     -w /code \
     --name "decomposed-exemplar-builder2" \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
     ${DOCKER_ARGS} \
     "${RACE_COMPILE_IMAGE}" \
     "${COMMAND}" ${BUILD_ARGS} "$@"

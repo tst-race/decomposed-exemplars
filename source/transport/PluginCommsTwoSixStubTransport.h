@@ -25,6 +25,8 @@
 #include <atomic>
 
 #include <algorithm>
+#include <mutex>
+#include <unordered_set>
 
 #include "LinkMap.h"
 
@@ -75,7 +77,18 @@ private:
 
     LinkMap links;
 
+    // Guards deletedLinks and actionToLinkIdMap, and serializes them against links add/remove so a
+    // link can never be observed as both present in links and absent from deletedLinks (or vice
+    // versa), and so actionToLinkIdMap lookups/erases cannot race with each other.
+    mutable std::mutex linkStateMutex;
+    std::unordered_set<LinkID> deletedLinks;
+
     std::unordered_map<uint64_t, LinkID> actionToLinkIdMap;
+
+    // actionIds whose actionToLinkIdMap entry was dropped by purgeStaleActionsForLinkLocked()
+    // before doAction() could resolve them, so doAction() still knows to report a terminal
+    // package failure instead of silently skipping handles that were never otherwise failed.
+    std::unordered_set<uint64_t> staleActionIds;
 
     // Next available hashtag suffix.
     // TODO: should probably pull from a pool of tags (randomly generated?) instead so we can reuse
@@ -86,8 +99,22 @@ private:
     bool preLinkCreate(const std::string &logPrefix, RaceHandle handle, const LinkID &linkId,
                        LinkSide invalidRoleLinkSide);
     ComponentStatus postLinkCreate(const std::string &logPrefix, RaceHandle handle,
-                                   const LinkID &linkId, const std::shared_ptr<Link> &link,
-                                   LinkStatus linkStatus);
+                                   const LinkID &linkId, const LinkAddress &address,
+                                   const LinkProperties &properties, LinkStatus linkStatus);
+
+    // Returns true if linkId is tombstoned and the caller should skip the action. Must be called
+    // while holding linkStateMutex.
+    bool isDeletedLocked(const LinkID &linkId) const;
+
+    // Drops the tombstone for linkId once no pending action still maps to it, to bound the set's
+    // size instead of retaining every destroyed link ID indefinitely. Must be called while holding
+    // linkStateMutex.
+    void pruneDeletedLinkIfUnreferencedLocked(const LinkID &linkId);
+
+    // Erases any actionToLinkIdMap entries for linkId, so stale actions queued against a destroyed
+    // link instance can't be misapplied once the ID is reused by a newly created link. Must be
+    // called while holding linkStateMutex.
+    void purgeStaleActionsForLinkLocked(const std::string &logPrefix, const LinkID &linkId);
 };
 
 #endif  // __COMMS_TWOSIX_TRANSPORT_H__

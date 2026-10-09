@@ -80,12 +80,12 @@ ComponentStatus Link::dequeueContent(uint64_t actionId) {
 ComponentStatus Link::fetch() {
     TRACE_METHOD(linkId);
 
+    std::lock_guard<std::mutex> lock(mutex);
+
     if (isShutdown) {
         logError(logPrefix + "link has been shutdown: " + linkId);
         return COMPONENT_ERROR;
     }
-
-    std::lock_guard<std::mutex> lock(mutex);
 
     if (actionQueue.size() >= ACTION_QUEUE_MAX_CAPACITY) {
         logError(logPrefix + "action queue full for link: " + linkId);
@@ -100,13 +100,13 @@ ComponentStatus Link::fetch() {
 ComponentStatus Link::post(std::vector<RaceHandle> handles, uint64_t actionId) {
     TRACE_METHOD(linkId, handles, actionId);
 
+    std::lock_guard<std::mutex> lock(mutex);
+
     if (isShutdown) {
         logError(logPrefix + "link has been shutdown: " + linkId);
         updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
         return COMPONENT_ERROR;
     }
-
-    std::lock_guard<std::mutex> lock(mutex);
 
     if (actionQueue.size() >= ACTION_QUEUE_MAX_CAPACITY) {
         logError(logPrefix + "action queue full for link: " + linkId);
@@ -114,7 +114,8 @@ ComponentStatus Link::post(std::vector<RaceHandle> handles, uint64_t actionId) {
         return COMPONENT_ERROR;
     }
 
-    if (contentQueue.find(actionId) == contentQueue.end()) {
+    auto contentIter = contentQueue.find(actionId);
+    if (contentIter == contentQueue.end()) {
         // TODO: what's the correct log level. We want it to be an error(?) for performer encodings,
         // but this is expected for our own comms plugin.
         logInfo(logPrefix + "no enqueued content for given action ID: " + std::to_string(actionId));
@@ -130,7 +131,9 @@ ComponentStatus Link::post(std::vector<RaceHandle> handles, uint64_t actionId) {
         return COMPONENT_OK;
     }
 
-    actionQueue.push_back({true, std::move(handles), actionId});
+    // Copy the content into the queued action now, while still holding the lock, so a
+    // concurrent dequeueContent() erasing contentQueue can't race with the worker thread.
+    actionQueue.push_back({true, std::move(handles), actionId, contentIter->second});
     conditionVariable.notify_one();
     return COMPONENT_OK;
 }
@@ -142,7 +145,12 @@ void Link::start() {
 
 void Link::shutdown() {
     TRACE_METHOD(linkId);
-    isShutdown = true;
+    {
+        // Serialize with fetch()/post() so an action can never be enqueued after the worker
+        // thread has already observed shutdown and exited.
+        std::lock_guard<std::mutex> lock(mutex);
+        isShutdown = true;
+    }
     conditionVariable.notify_one();
     if (thread.joinable()) {
         thread.join();
@@ -155,20 +163,28 @@ void Link::runActionThread() {
 
     int latest = getInitialIndex();
 
-    while (not isShutdown) {
+    while (true) {
         std::unique_lock<std::mutex> lock(mutex);
         conditionVariable.wait(lock, [this] { return isShutdown or not actionQueue.empty(); });
 
-        if (isShutdown) {
-            logDebug(logPrefix + "shutting down");
-            break;
+        if (actionQueue.empty()) {
+            // Only exit once every action accepted before shutdown has been drained; otherwise an
+            // action queued right before shutdown() set the flag would be silently dropped.
+            if (isShutdown) {
+                logDebug(logPrefix + "shutting down");
+                break;
+            }
+            continue;
         }
 
         auto action = actionQueue.front();
         actionQueue.pop_front();
+        // Release the lock before processing so shutdown() (which also takes this lock) isn't
+        // blocked behind a slow network fetch/post.
+        lock.unlock();
 
         if (action.post) {
-            postOnActionThread(action.handles, action.actionId);
+            postOnActionThread(action.handles, action.actionId, action.content);
         } else {
             latest = fetchOnActionThread(latest);
         }
@@ -324,22 +340,13 @@ std::tuple<std::vector<std::string>, int, double> Link::getNewPosts(int latestIn
             std::stod(responseJson.at("timestamp").get<std::string>())};
 }
 
-void Link::postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t actionId) {
+void Link::postOnActionThread(const std::vector<RaceHandle> &handles, uint64_t actionId,
+                               const std::vector<uint8_t> &content) {
     TRACE_METHOD(linkId, handles, actionId);
     logPrefix += linkId + ": ";
 
-    auto iter = contentQueue.find(actionId);
-    if (iter == contentQueue.end()) {
-        // We really shouldn't get here, since we already check for this before queueing the action,
-        // but just in case...
-        logError(logPrefix +
-                 "no enqueued content for given action ID: " + std::to_string(actionId));
-        updatePackageStatus(handles, PACKAGE_FAILED_GENERIC);
-        return;
-    }
-
-    logDebug("hash of post " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(iter->second.begin(), iter->second.end()))));
-    std::string message = base64::encode(iter->second);
+    logDebug("hash of post " + RaceLog::stringifyValues("hash", std::hash<std::string>()(std::string(content.begin(), content.end()))));
+    std::string message = base64::encode(content);
     auto msgHash = postedMessageHashes.addMessage(message);
 
     int tries = 0;
