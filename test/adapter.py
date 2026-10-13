@@ -114,41 +114,144 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
 
     # request.direction is only set (non-None) when this slot has been split
     # into two genuinely independent channels/compositions, one per
-    # direction (see adapter_types.NodeRequest.direction). In that case, only
-    # the listener's "recv" link and the connector's "send" link get an
-    # explicit, out-of-band-published address; the other direction on each
-    # side is established dynamically per-connection (the listener loads a
-    # reply link address embedded in the dialer's hello message, and the
-    # dialer self-creates its recv link and advertises it the same way - see
-    # raceboat/source/state-machine/DialStateMachine.cpp's StateDialSendOpen
-    # and ListenStateMachine.cpp's StateListenWaitingForSendConnection).
-    is_dynamic_direction = request.direction == "send" if request.role == "listener" else (
-        request.direction == "recv" if request.role == "connector" else False
-    )
+    # direction (see adapter_types.NodeRequest.direction).
+    #
+    # For bootstrap modes (slots "initial"/"final"): the listener's send and
+    # connector's recv are dynamic (established per-connection via hello exchange)
+    # UNLESS linkDirectionOverrides changes the effective link direction.
+    # For client-connect/send/send-recv modes (slot "channel"): both directions
+    # are explicit - listener creates both links, connector loads both.
+    is_bootstrap_slot = request.slot in ("initial", "final")
+    is_dynamic_direction = False
+    if is_bootstrap_slot and request.direction:
+        link_direction = request.effective_link_direction or "LD_BIDI"
+        if request.role == "listener" and request.direction == "send":
+            # Listener's send link (downstream): dynamic unless LD_CREATOR_TO_LOADER
+            # LD_BIDI, LD_LOADER_TO_CREATOR -> dynamic (loaded from hello)
+            # LD_CREATOR_TO_LOADER -> creator creates, not dynamic
+            is_dynamic_direction = link_direction in ("LD_BIDI", "LD_LOADER_TO_CREATOR")
+        elif request.role == "connector" and request.direction == "recv":
+            # Connector's recv link (downstream): dynamic unless LD_CREATOR_TO_LOADER
+            # LD_BIDI, LD_LOADER_TO_CREATOR -> dynamic (created in hello)
+            # LD_CREATOR_TO_LOADER -> loader loads from creator, not dynamic
+            is_dynamic_direction = link_direction in ("LD_BIDI", "LD_LOADER_TO_CREATOR")
     if is_dynamic_direction:
         return contribution
 
     if request.role == "listener":
-        # createLink()'s default hashtag is derived from the running race
-        # persona (see PluginCommsTwoSixStubTransport.cpp), which we can't
-        # predict from outside the container. Set --recv-address explicitly
-        # instead so the same value can be published for connectors to load.
-        address = {
-            "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
-            "hostname": WHITEBOARD_HOSTNAME,
-            "port": WHITEBOARD_PORT,
-        }
-        contribution.address_output = address
-        contribution.cli_flags["recv-address"] = json.dumps(address)
+        # For mixed slots (direction specified), only create/publish the
+        # address for this specific direction. For simple modes (direction=None),
+        # create both links and publish both addresses.
+        
+        # Determine if listener send creates or loads its address
+        is_bootstrap_slot = request.slot in ("initial", "final")
+        link_direction = request.effective_link_direction or "LD_BIDI"
+        listener_send_creates = not (
+            is_bootstrap_slot
+            and request.direction == "send"
+            and link_direction == "LD_LOADER_TO_CREATOR"
+        )
+        # listener_recv_creates is always True in bootstrap (listener creates upstream recv)
+        listener_recv_creates = True
+
+        if request.direction == "recv" and listener_recv_creates:
+            recv_address = {
+                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                "hostname": WHITEBOARD_HOSTNAME,
+                "port": WHITEBOARD_PORT,
+            }
+            contribution.address_output = {"recv": recv_address}
+            contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+        elif request.direction == "send":
+            if listener_send_creates:
+                # Listener creates send address (LD_BIDI or LD_CREATOR_TO_LOADER)
+                send_address = {
+                    "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                contribution.address_output = {"send": send_address}
+                contribution.cli_flags["send-address"] = json.dumps(send_address)
+            else:
+                # Listener LOADS send address from connector (LD_LOADER_TO_CREATOR)
+                contribution.needs_peer_address = True
+                connector_addresses = next(iter(request.peer_context.values()), None)
+                if connector_addresses is None:
+                    raise ValueError(
+                        "decomposed-exemplars adapter: listener node requires a "
+                        "connector's address_output in peer_context for LD_LOADER_TO_CREATOR, "
+                        "but none was provided"
+                    )
+                if isinstance(connector_addresses, dict) and "recv" in connector_addresses:
+                    contribution.cli_flags["send-address"] = json.dumps(connector_addresses["recv"])
+        else:
+            # Simple mode: both directions
+            # For bootstrap simple mode, we assume LD_BIDI (both create)
+            recv_address = {
+                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                "hostname": WHITEBOARD_HOSTNAME,
+                "port": WHITEBOARD_PORT,
+            }
+            send_address = {
+                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                "hostname": WHITEBOARD_HOSTNAME,
+                "port": WHITEBOARD_PORT,
+            }
+            contribution.address_output = {"recv": recv_address, "send": send_address}
+            contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+            contribution.cli_flags["send-address"] = json.dumps(send_address)
     elif request.role == "connector":
-        contribution.needs_peer_address = True
-        listener_address = next(iter(request.peer_context.values()), None)
-        if listener_address is None:
-            raise ValueError(
-                "decomposed-exemplars adapter: connector node requires a "
-                "listener's address_output in peer_context, but none was provided"
-            )
-        contribution.cli_flags["send-address"] = json.dumps(listener_address)
+        # Determine if connector recv is dynamic or creates its own address
+        is_bootstrap_slot = request.slot in ("initial", "final")
+        link_direction = request.effective_link_direction or "LD_BIDI"
+        connector_recv_creates = (
+            is_bootstrap_slot
+            and request.direction == "recv"
+            and link_direction == "LD_LOADER_TO_CREATOR"
+        )
+
+        if connector_recv_creates:
+            # Connector CREATES its own recv address (loader creates)
+            # Listener will load this address for its send link
+            recv_address = {
+                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                "hostname": WHITEBOARD_HOSTNAME,
+                "port": WHITEBOARD_PORT,
+            }
+            contribution.address_output = {"recv": recv_address}
+            contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+            # No send-address needed for this direction
+        else:
+            # Default: connector loads from listener's address
+            contribution.needs_peer_address = True
+            listener_addresses = next(iter(request.peer_context.values()), None)
+            if listener_addresses is None:
+                raise ValueError(
+                    "decomposed-exemplars adapter: connector node requires a "
+                    "listener's address_output in peer_context, but none was provided"
+                )
+            # Listener publishes recv and/or send addresses. Connector loads:
+            # - send-address = listener's recv address (where connector sends, upstream)
+            # - recv-address = listener's send address (where connector receives, downstream)
+            if isinstance(listener_addresses, dict) and ("recv" in listener_addresses or "send" in listener_addresses):
+                # Mixed slot format: listener published address(es) for specific direction(s)
+                if request.direction == "send":
+                    # Connector sends upstream -> needs listener's recv address
+                    if "recv" in listener_addresses:
+                        contribution.cli_flags["send-address"] = json.dumps(listener_addresses["recv"])
+                elif request.direction == "recv":
+                    # Connector receives downstream -> needs listener's send address
+                    if "send" in listener_addresses:
+                        contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["send"])
+                else:
+                    # Simple mode: listener published both addresses
+                    if "recv" in listener_addresses:
+                        contribution.cli_flags["send-address"] = json.dumps(listener_addresses["recv"])
+                    if "send" in listener_addresses:
+                        contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["send"])
+            else:
+                # Legacy format: only recv address provided (for bootstrap modes)
+                contribution.cli_flags["send-address"] = json.dumps(listener_addresses)
     else:
         raise ValueError(f"decomposed-exemplars adapter: unknown role '{request.role}'")
 
