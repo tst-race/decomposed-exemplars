@@ -1,3 +1,4 @@
 *~
 build/
 kit/
+__pycache__/

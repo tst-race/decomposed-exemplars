@@ -8,6 +8,7 @@ orchestrator (raceboat/test/integration/) never needs to know this plugin's
 sidecar or address-format requirements.
 """
 
+import hashlib
 import json
 import platform
 import sys
@@ -37,6 +38,15 @@ except ImportError:
 # channel gid used for --recv-channel/--send-channel.
 DEFAULT_COMPOSITION = "twoSixIndirectComposition"
 KIT_NAME = "PluginCommsTwoSixStubDecomposed"
+
+
+def _deterministic_hashtag(composition: str, slot: str, direction: str) -> str:
+    """Generate a deterministic hashtag for a given composition, slot, and direction.
+    This allows both sides of a link to compute the same address without peer_context.
+    direction should be "upstream" (listener recv / connector send) or "downstream" (listener send / connector recv)."""
+    seed = f"{composition}_{slot}_{direction}"
+    hash_hex = hashlib.md5(seed.encode()).hexdigest()[:12]
+    return f"twoSixIndirect_{hash_hex}"
 
 # twoSixIndirect is backed by a shared whiteboard (see
 # decomposed-exemplars/scripts/docker-compose.yml); required as a sidecar
@@ -143,28 +153,42 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
         # address for this specific direction. For simple modes (direction=None),
         # create both links and publish both addresses.
         
-        # Determine if listener send creates or loads its address
-        is_bootstrap_slot = request.slot in ("initial", "final")
         link_direction = request.effective_link_direction or "LD_BIDI"
-        listener_send_creates = not (
-            is_bootstrap_slot
-            and request.direction == "send"
-            and link_direction == "LD_LOADER_TO_CREATOR"
-        )
-        # listener_recv_creates is always True in bootstrap (listener creates upstream recv)
-        listener_recv_creates = True
+        is_bootstrap_slot = request.slot in ("initial", "final")
+        composition = request.composition_name or DEFAULT_COMPOSITION
 
-        if request.direction == "recv" and listener_recv_creates:
-            recv_address = {
-                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
-                "hostname": WHITEBOARD_HOSTNAME,
-                "port": WHITEBOARD_PORT,
-            }
-            contribution.address_output = {"recv": recv_address}
-            contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+        if request.direction == "recv":
+            # Listener recv: creates for LD_BIDI/LD_LOADER_TO_CREATOR, loads for LD_CREATOR_TO_LOADER
+            listener_recv_creates = link_direction != "LD_CREATOR_TO_LOADER"
+            if listener_recv_creates:
+                recv_address = {
+                    "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                contribution.address_output = {"recv": recv_address}
+                contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+            else:
+                # Listener LOADS recv address from connector's send address (upstream)
+                contribution.needs_peer_address = True
+                connector_addresses = next(iter(request.peer_context.values()), None)
+                if connector_addresses is not None and isinstance(connector_addresses, dict) and "send" in connector_addresses:
+                    contribution.cli_flags["recv-address"] = json.dumps(connector_addresses["send"])
+                else:
+                    # Generate deterministic upstream address (shared with connector's send)
+                    upstream_hashtag = _deterministic_hashtag(composition, request.slot, "upstream")
+                    recv_address = {
+                        "hashtag": upstream_hashtag,
+                        "hostname": WHITEBOARD_HOSTNAME,
+                        "port": WHITEBOARD_PORT,
+                    }
+                    contribution.cli_flags["recv-address"] = json.dumps(recv_address)
         elif request.direction == "send":
+            # Listener send: creates for LD_BIDI/LD_CREATOR_TO_LOADER, loads for LD_LOADER_TO_CREATOR
+            listener_send_creates = not (
+                is_bootstrap_slot and link_direction == "LD_LOADER_TO_CREATOR"
+            )
             if listener_send_creates:
-                # Listener creates send address (LD_BIDI or LD_CREATOR_TO_LOADER)
                 send_address = {
                     "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
                     "hostname": WHITEBOARD_HOSTNAME,
@@ -173,85 +197,229 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
                 contribution.address_output = {"send": send_address}
                 contribution.cli_flags["send-address"] = json.dumps(send_address)
             else:
-                # Listener LOADS send address from connector (LD_LOADER_TO_CREATOR)
+                # Listener LOADS send address from connector's recv address (downstream)
                 contribution.needs_peer_address = True
                 connector_addresses = next(iter(request.peer_context.values()), None)
-                if connector_addresses is None:
-                    raise ValueError(
-                        "decomposed-exemplars adapter: listener node requires a "
-                        "connector's address_output in peer_context for LD_LOADER_TO_CREATOR, "
-                        "but none was provided"
-                    )
-                if isinstance(connector_addresses, dict) and "recv" in connector_addresses:
+                if connector_addresses is not None and isinstance(connector_addresses, dict) and "recv" in connector_addresses:
                     contribution.cli_flags["send-address"] = json.dumps(connector_addresses["recv"])
-        else:
-            # Simple mode: both directions
-            # For bootstrap simple mode, we assume LD_BIDI (both create)
-            recv_address = {
-                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
-                "hostname": WHITEBOARD_HOSTNAME,
-                "port": WHITEBOARD_PORT,
-            }
-            send_address = {
-                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
-                "hostname": WHITEBOARD_HOSTNAME,
-                "port": WHITEBOARD_PORT,
-            }
-            contribution.address_output = {"recv": recv_address, "send": send_address}
-            contribution.cli_flags["recv-address"] = json.dumps(recv_address)
-            contribution.cli_flags["send-address"] = json.dumps(send_address)
-    elif request.role == "connector":
-        # Determine if connector recv is dynamic or creates its own address
-        is_bootstrap_slot = request.slot in ("initial", "final")
-        link_direction = request.effective_link_direction or "LD_BIDI"
-        connector_recv_creates = (
-            is_bootstrap_slot
-            and request.direction == "recv"
-            and link_direction == "LD_LOADER_TO_CREATOR"
-        )
-
-        if connector_recv_creates:
-            # Connector CREATES its own recv address (loader creates)
-            # Listener will load this address for its send link
-            recv_address = {
-                "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
-                "hostname": WHITEBOARD_HOSTNAME,
-                "port": WHITEBOARD_PORT,
-            }
-            contribution.address_output = {"recv": recv_address}
-            contribution.cli_flags["recv-address"] = json.dumps(recv_address)
-            # No send-address needed for this direction
-        else:
-            # Default: connector loads from listener's address
-            contribution.needs_peer_address = True
-            listener_addresses = next(iter(request.peer_context.values()), None)
-            if listener_addresses is None:
-                raise ValueError(
-                    "decomposed-exemplars adapter: connector node requires a "
-                    "listener's address_output in peer_context, but none was provided"
-                )
-            # Listener publishes recv and/or send addresses. Connector loads:
-            # - send-address = listener's recv address (where connector sends, upstream)
-            # - recv-address = listener's send address (where connector receives, downstream)
-            if isinstance(listener_addresses, dict) and ("recv" in listener_addresses or "send" in listener_addresses):
-                # Mixed slot format: listener published address(es) for specific direction(s)
-                if request.direction == "send":
-                    # Connector sends upstream -> needs listener's recv address
-                    if "recv" in listener_addresses:
-                        contribution.cli_flags["send-address"] = json.dumps(listener_addresses["recv"])
-                elif request.direction == "recv":
-                    # Connector receives downstream -> needs listener's send address
-                    if "send" in listener_addresses:
-                        contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["send"])
                 else:
-                    # Simple mode: listener published both addresses
-                    if "recv" in listener_addresses:
-                        contribution.cli_flags["send-address"] = json.dumps(listener_addresses["recv"])
-                    if "send" in listener_addresses:
-                        contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["send"])
+                    # Generate deterministic downstream address (shared with connector's recv)
+                    downstream_hashtag = _deterministic_hashtag(composition, request.slot, "downstream")
+                    send_address = {
+                        "hashtag": downstream_hashtag,
+                        "hostname": WHITEBOARD_HOSTNAME,
+                        "port": WHITEBOARD_PORT,
+                    }
+                    contribution.cli_flags["send-address"] = json.dumps(send_address)
+        else:
+            # Simple mode (direction=None): both directions, respect link direction
+            # For recv: creates for LD_BIDI/LD_LOADER_TO_CREATOR, loads for LD_CREATOR_TO_LOADER
+            # For send: creates for LD_BIDI/LD_CREATOR_TO_LOADER, loads for LD_LOADER_TO_CREATOR
+            address_output = {}
+            
+            # Handle recv direction
+            listener_recv_creates = link_direction != "LD_CREATOR_TO_LOADER"
+            if listener_recv_creates:
+                recv_address = {
+                    "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                address_output["recv"] = recv_address
+                contribution.cli_flags["recv-address"] = json.dumps(recv_address)
             else:
-                # Legacy format: only recv address provided (for bootstrap modes)
-                contribution.cli_flags["send-address"] = json.dumps(listener_addresses)
+                contribution.needs_peer_address = True
+                connector_addresses = next(iter(request.peer_context.values()), None)
+                if connector_addresses is not None and isinstance(connector_addresses, dict) and "send" in connector_addresses:
+                    contribution.cli_flags["recv-address"] = json.dumps(connector_addresses["send"])
+                else:
+                    upstream_hashtag = _deterministic_hashtag(composition, request.slot, "upstream")
+                    recv_address = {
+                        "hashtag": upstream_hashtag,
+                        "hostname": WHITEBOARD_HOSTNAME,
+                        "port": WHITEBOARD_PORT,
+                    }
+                    contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+            
+            # Handle send direction
+            # For send-recv mode (non-bootstrap): listener creates send for LD_BIDI/LD_CREATOR_TO_LOADER,
+            # loads for LD_LOADER_TO_CREATOR
+            # For bootstrap: listener creates send for LD_BIDI/LD_CREATOR_TO_LOADER,
+            # loads for LD_LOADER_TO_CREATOR (dynamic, loaded from hello)
+            if is_bootstrap_slot:
+                listener_send_creates = link_direction != "LD_LOADER_TO_CREATOR"
+            else:
+                listener_send_creates = link_direction in ("LD_BIDI", "LD_CREATOR_TO_LOADER")
+            if listener_send_creates:
+                send_address = {
+                    "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                address_output["send"] = send_address
+                contribution.cli_flags["send-address"] = json.dumps(send_address)
+            else:
+                # Generate deterministic downstream address (shared with connector's recv)
+                downstream_hashtag = _deterministic_hashtag(composition, request.slot, "downstream")
+                send_address = {
+                    "hashtag": downstream_hashtag,
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                # Add to address_output so connector can use it for its recv link
+                address_output["send"] = send_address
+                contribution.cli_flags["send-address"] = json.dumps(send_address)
+            
+            if address_output:
+                contribution.address_output = address_output
+    elif request.role == "connector":
+        link_direction = request.effective_link_direction or "LD_BIDI"
+        is_bootstrap_slot = request.slot in ("initial", "final")
+        composition = request.composition_name or DEFAULT_COMPOSITION
+
+        if request.direction == "send":
+            # Connector send: creates for LD_BIDI/LD_CREATOR_TO_LOADER, loads for LD_LOADER_TO_CREATOR
+            connector_send_creates = not (
+                is_bootstrap_slot and link_direction == "LD_LOADER_TO_CREATOR"
+            )
+            if connector_send_creates:
+                # Connector creates its send address (upstream) - use deterministic hashtag
+                # so listener can also compute it for its recv
+                upstream_hashtag = _deterministic_hashtag(composition, request.slot, "upstream")
+                send_address = {
+                    "hashtag": upstream_hashtag,
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                contribution.address_output = {"send": send_address}
+                contribution.cli_flags["send-address"] = json.dumps(send_address)
+            else:
+                # Connector LOADS send address from listener's recv address
+                contribution.needs_peer_address = True
+                listener_addresses = next(iter(request.peer_context.values()), None)
+                if listener_addresses is not None and isinstance(listener_addresses, dict) and "recv" in listener_addresses:
+                    contribution.cli_flags["send-address"] = json.dumps(listener_addresses["recv"])
+                else:
+                    # Fallback to deterministic upstream address
+                    upstream_hashtag = _deterministic_hashtag(composition, request.slot, "upstream")
+                    send_address = {
+                        "hashtag": upstream_hashtag,
+                        "hostname": WHITEBOARD_HOSTNAME,
+                        "port": WHITEBOARD_PORT,
+                    }
+                    contribution.cli_flags["send-address"] = json.dumps(send_address)
+        elif request.direction == "recv":
+            # Connector recv: creates for LD_BIDI/LD_LOADER_TO_CREATOR, loads for LD_CREATOR_TO_LOADER
+            connector_recv_creates = (
+                is_bootstrap_slot and link_direction == "LD_LOADER_TO_CREATOR"
+            )
+            if connector_recv_creates:
+                # Connector CREATES its own recv address (loader creates)
+                # Listener will load this address for its send link (downstream)
+                downstream_hashtag = _deterministic_hashtag(composition, request.slot, "downstream")
+                recv_address = {
+                    "hashtag": downstream_hashtag,
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                contribution.address_output = {"recv": recv_address}
+                contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+            else:
+                # Connector LOADS recv address from listener's send address
+                contribution.needs_peer_address = True
+                listener_addresses = next(iter(request.peer_context.values()), None)
+                if listener_addresses is not None and isinstance(listener_addresses, dict) and "send" in listener_addresses:
+                    contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["send"])
+                elif listener_addresses is not None and isinstance(listener_addresses, dict) and "recv" in listener_addresses:
+                    # Legacy format for bootstrap: listener only published recv
+                    contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["recv"])
+                elif listener_addresses is not None:
+                    contribution.cli_flags["recv-address"] = json.dumps(listener_addresses)
+                else:
+                    # Fallback to deterministic downstream address
+                    downstream_hashtag = _deterministic_hashtag(composition, request.slot, "downstream")
+                    recv_address = {
+                        "hashtag": downstream_hashtag,
+                        "hostname": WHITEBOARD_HOSTNAME,
+                        "port": WHITEBOARD_PORT,
+                    }
+                    contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+        else:
+            # Simple mode (direction=None): both directions, respect link direction
+            # For send: creates for LD_BIDI/LD_CREATOR_TO_LOADER, loads for LD_LOADER_TO_CREATOR
+            # For recv: creates for LD_BIDI/LD_LOADER_TO_CREATOR, loads for LD_CREATOR_TO_LOADER
+            address_output = {}
+            
+            # Handle send direction
+            # For send-recv mode (non-bootstrap): connector creates send for LD_BIDI/LD_CREATOR_TO_LOADER,
+            # loads for LD_LOADER_TO_CREATOR
+            # For bootstrap: connector creates send for LD_BIDI/LD_CREATOR_TO_LOADER,
+            # loads for LD_LOADER_TO_CREATOR
+            if is_bootstrap_slot:
+                connector_send_creates = link_direction != "LD_LOADER_TO_CREATOR"
+            else:
+                connector_send_creates = link_direction in ("LD_BIDI", "LD_CREATOR_TO_LOADER")
+            if connector_send_creates:
+                upstream_hashtag = _deterministic_hashtag(composition, request.slot, "upstream")
+                send_address = {
+                    "hashtag": upstream_hashtag,
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                address_output["send"] = send_address
+                contribution.cli_flags["send-address"] = json.dumps(send_address)
+            else:
+                contribution.needs_peer_address = True
+                listener_addresses = next(iter(request.peer_context.values()), None)
+                if listener_addresses is not None and isinstance(listener_addresses, dict) and "recv" in listener_addresses:
+                    contribution.cli_flags["send-address"] = json.dumps(listener_addresses["recv"])
+                else:
+                    upstream_hashtag = _deterministic_hashtag(composition, request.slot, "upstream")
+                    send_address = {
+                        "hashtag": upstream_hashtag,
+                        "hostname": WHITEBOARD_HOSTNAME,
+                        "port": WHITEBOARD_PORT,
+                    }
+                    contribution.cli_flags["send-address"] = json.dumps(send_address)
+            
+            # Handle recv direction
+            # For send-recv mode (non-bootstrap): connector creates recv for LD_BIDI/LD_LOADER_TO_CREATOR,
+            # loads for LD_CREATOR_TO_LOADER
+            # For bootstrap: connector creates recv for LD_LOADER_TO_CREATOR (dynamic),
+            # loads for LD_BIDI/LD_CREATOR_TO_LOADER
+            if is_bootstrap_slot:
+                connector_recv_creates = link_direction == "LD_LOADER_TO_CREATOR"
+            else:
+                connector_recv_creates = link_direction in ("LD_BIDI", "LD_LOADER_TO_CREATOR")
+            if connector_recv_creates:
+                downstream_hashtag = _deterministic_hashtag(composition, request.slot, "downstream")
+                recv_address = {
+                    "hashtag": downstream_hashtag,
+                    "hostname": WHITEBOARD_HOSTNAME,
+                    "port": WHITEBOARD_PORT,
+                }
+                address_output["recv"] = recv_address
+                contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+            else:
+                contribution.needs_peer_address = True
+                listener_addresses = next(iter(request.peer_context.values()), None)
+                if listener_addresses is not None and isinstance(listener_addresses, dict) and "send" in listener_addresses:
+                    contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["send"])
+                elif listener_addresses is not None and isinstance(listener_addresses, dict) and "recv" in listener_addresses:
+                    contribution.cli_flags["recv-address"] = json.dumps(listener_addresses["recv"])
+                elif listener_addresses is not None:
+                    contribution.cli_flags["recv-address"] = json.dumps(listener_addresses)
+                else:
+                    downstream_hashtag = _deterministic_hashtag(composition, request.slot, "downstream")
+                    recv_address = {
+                        "hashtag": downstream_hashtag,
+                        "hostname": WHITEBOARD_HOSTNAME,
+                        "port": WHITEBOARD_PORT,
+                    }
+                    contribution.cli_flags["recv-address"] = json.dumps(recv_address)
+            
+            if address_output:
+                contribution.address_output = address_output
     else:
         raise ValueError(f"decomposed-exemplars adapter: unknown role '{request.role}'")
 
