@@ -161,8 +161,9 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
             # Listener recv: creates for LD_BIDI/LD_LOADER_TO_CREATOR, loads for LD_CREATOR_TO_LOADER
             listener_recv_creates = link_direction != "LD_CREATOR_TO_LOADER"
             if listener_recv_creates:
+                recv_hashtag = _deterministic_hashtag(composition, request.slot, "upstream")
                 recv_address = {
-                    "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                    "hashtag": recv_hashtag,
                     "hostname": WHITEBOARD_HOSTNAME,
                     "port": WHITEBOARD_PORT,
                 }
