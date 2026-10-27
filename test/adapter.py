@@ -221,8 +221,10 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
             # Handle recv direction
             listener_recv_creates = link_direction != "LD_CREATOR_TO_LOADER"
             if listener_recv_creates:
+                # Deterministic so a connector that also "creates" its send side
+                # (LD_BIDI) lands on the same hashtag.
                 recv_address = {
-                    "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                    "hashtag": _deterministic_hashtag(composition, request.slot, "upstream"),
                     "hostname": WHITEBOARD_HOSTNAME,
                     "port": WHITEBOARD_PORT,
                 }
@@ -253,7 +255,7 @@ def generate_node_contribution(request: NodeRequest) -> NodeContribution:
                 listener_send_creates = link_direction in ("LD_BIDI", "LD_CREATOR_TO_LOADER")
             if listener_send_creates:
                 send_address = {
-                    "hashtag": f"twoSixIndirect_{uuid.uuid4().hex[:12]}",
+                    "hashtag": _deterministic_hashtag(composition, request.slot, "downstream"),
                     "hostname": WHITEBOARD_HOSTNAME,
                     "port": WHITEBOARD_PORT,
                 }

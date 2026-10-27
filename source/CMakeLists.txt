@@ -151,11 +151,16 @@ if(ANDROID)
     add_custom_command(
         COMMAND ${CMAKE_COMMAND} -E make_directory ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json
-        OUTPUT ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/manifest.json
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/user-model-file/actions.json ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json ${CMAKE_CURRENT_SOURCE_DIR}/user-model-file/actions.json
+        OUTPUT
+            ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/manifest.json
+            ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/actions.json
     )
     add_custom_target(PluginCommsTwoSixStubManifest ALL
-        DEPENDS ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/manifest.json
+        DEPENDS
+            ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/manifest.json
+            ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}/PluginCommsTwoSixStubDecomposed/actions.json
     )
 else()
     if ("${TARGET_ARCHITECTURE}" STREQUAL "LINUX_arm64-v8a")
@@ -169,19 +174,26 @@ else()
         COMMAND ${CMAKE_COMMAND} -E make_directory ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/user-model-file/actions.json ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/user-model-file/actions.json ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json ${CMAKE_CURRENT_SOURCE_DIR}/user-model-file/actions.json
         OUTPUT
             ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/manifest.json
             ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/manifest.json
+            ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/actions.json
+            ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/actions.json
     )
     add_custom_target(PluginCommsTwoSixStubManifest ALL DEPENDS
         ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/manifest.json
         ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/manifest.json
+        ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-client/PluginCommsTwoSixStubDecomposed/actions.json
+        ${PLUGIN_BASE_DIR}/artifacts/${NODE_TYPE}-server/PluginCommsTwoSixStubDecomposed/actions.json
     )
 endif()
 
 install(
     FILES ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/user-model-file/actions.json
         DESTINATION lib/race/comms/PluginCommsTwoSixStubDecomposed
 )
 
